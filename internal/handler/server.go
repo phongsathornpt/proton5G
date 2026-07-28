@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"fm350-monitor/internal/pkg/appdefaults"
@@ -25,15 +26,22 @@ type ModemUsecase interface {
 	MBIMStatus() map[string]any
 	MBIMConnect(device, apn string) (string, error)
 	MBIMDisconnect(device string) (string, error)
+	DataConnect(req domain.DataConnectRequest) (string, error)
+	DataDisconnect(req domain.DataConnectRequest) (string, error)
+	USBMode() domain.USBModeInfo
+	SetUSBMode(mode int) (domain.USBModeInfo, error)
 }
 
 // Server is the HTTP/SSE adapter.
 type Server struct {
-	svc ModemUsecase
+	svc   ModemUsecase
+	token string // optional shared API token; empty = open access
 }
 
-func NewServer(svc ModemUsecase) *Server {
-	return &Server{svc: svc}
+// NewServer builds the HTTP adapter. token protects all routes when non-empty
+// (Authorization Bearer, X-API-Token, or ?token= for SSE).
+func NewServer(svc ModemUsecase, token string) *Server {
+	return &Server{svc: svc, token: strings.TrimSpace(token)}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -54,8 +62,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/mbim", s.handleMBIMStatus)
 	mux.HandleFunc("POST /api/mbim/connect", s.handleMBIMConnect)
 	mux.HandleFunc("POST /api/mbim/disconnect", s.handleMBIMDisconnect)
+	mux.HandleFunc("POST /api/data/connect", s.handleDataConnect)
+	mux.HandleFunc("POST /api/data/disconnect", s.handleDataDisconnect)
+	mux.HandleFunc("GET /api/usbmode", s.handleGetUSBMode)
+	mux.HandleFunc("POST /api/usbmode", s.handleSetUSBMode)
 
-	return mux
+	var h http.Handler = mux
+	if s.token != "" {
+		h = s.authMiddleware(mux)
+	}
+	return h
 }
 
 func (s *Server) handleListModems(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +237,56 @@ func (s *Server) handleMBIMDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": out})
+}
+
+func (s *Server) handleDataConnect(w http.ResponseWriter, r *http.Request) {
+	var req domain.DataConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	out, err := s.svc.DataConnect(req)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": out})
+}
+
+func (s *Server) handleDataDisconnect(w http.ResponseWriter, r *http.Request) {
+	var req domain.DataConnectRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	out, err := s.svc.DataDisconnect(req)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "output": out})
+}
+
+func (s *Server) handleGetUSBMode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.svc.USBMode())
+}
+
+func (s *Server) handleSetUSBMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode int `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	info, err := s.svc.SetUSBMode(req.Mode)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "usb_mode": info})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "usb_mode": info})
 }
 
 func writeUsecaseError(w http.ResponseWriter, err error) {

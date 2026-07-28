@@ -100,22 +100,40 @@
             </form>
         </section>
 
-        <!-- MBIM Bearer -->
+        <!-- Data Bearer (RNDIS / MBIM) -->
         <section class="card">
-            <h2>MBIM Bearer</h2>
+            <h2>Data Bearer</h2>
             <div class="info-list">
+                <div class="info-item"><span>Mode:</span> <strong id="data-mode">-</strong></div>
                 <div class="info-item"><span>mbimcli:</span> <strong id="mbim-cli">-</strong></div>
             </div>
             <div class="form-group mt-15">
-                <label for="mbim-select">MBIM device</label>
-                <select id="mbim-select"></select>
+                <label for="data-iface-select">Data interface</label>
+                <select id="data-iface-select"></select>
             </div>
             <div class="button-group mt-15">
-                <button type="button" class="btn-primary" id="mbim-connect-btn" onclick="mbimConnect()">Connect</button>
-                <button type="button" onclick="mbimDisconnect()">Disconnect</button>
-                <button type="button" onclick="refreshMBIM()">Refresh</button>
+                <button type="button" class="btn-primary" id="data-connect-btn" onclick="dataConnect()">Connect</button>
+                <button type="button" onclick="dataDisconnect()">Disconnect</button>
+                <button type="button" onclick="refreshModems()">Refresh</button>
             </div>
-            <p class="hint" id="mbim-hint">Optional: requires <code>mbimcli</code> (libmbim-utils) and a <code>/dev/cdc-wdm*</code> node.</p>
+            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM (<code>/dev/cdc-wdm*</code>). Apply APN via AT first, then Connect.</p>
+        </section>
+
+        <!-- USB composition (GTUSBMODE) -->
+        <section class="card">
+            <h2>USB Composition</h2>
+            <div class="info-list">
+                <div class="info-item"><span>Current:</span> <strong id="usb-mode-current">-</strong></div>
+            </div>
+            <div class="form-group mt-15">
+                <label for="usb-mode-select">Profile (AT+GTUSBMODE)</label>
+                <select id="usb-mode-select"></select>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" onclick="applyUSBMode()">Apply mode</button>
+                <button type="button" onclick="refreshUSBMode()">Refresh</button>
+            </div>
+            <p class="hint" id="usb-mode-hint">Stock FM350 modes 40/41 are both RNDIS+serial (not MBIM). Changing mode re-enumerates USB.</p>
         </section>
 
         <!-- Signal history -->

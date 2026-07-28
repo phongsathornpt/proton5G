@@ -46,16 +46,40 @@ Or via the WebUI **USB Hard Reset** button / `POST /api/reset` (requires privile
 
 FM350 often exposes several `/dev/ttyUSB*`. The manager probes each candidate with `AT` and uses the first that returns `OK`. Override with `-serial /dev/ttyUSBN` if needed.
 
+## Extended / proprietary signal
+
+Status polling uses:
+
+1. `AT+CSQ` (RSSI)
+2. `AT+CESQ` (RSRP/RSRQ when available)
+3. Fallback: `AT+GTCAINFO?` then `AT+GTCCINFO?` (Fibocom cell info) when CESQ has no RSRP
+
+## USB composition (`AT+GTUSBMODE`)
+
+Documented stock modes for many FM350 USB builds:
+
+| Mode | Meaning |
+|------|---------|
+| **40** | RNDIS + AT + GNSS + META + DEBUG + NPT + ADB |
+| **41** | Default; mode 40 + extra AP(LOG)/AP(META) serials |
+
+Both are **RNDIS**, not MBIM. Setting a mode re-enumerates USB (brief disconnect). WebUI: **USB Composition** card or `GET/POST /api/usbmode`.
+
+```bash
+AT+GTUSBMODE?
+AT+GTUSBMODE=41
+```
+
 ## MBIM Data Bearer (optional)
 
-Install `libmbim-utils` for `mbimcli`. The WebUI MBIM panel shells out to:
+Install `libmbim-utils` for `mbimcli`. The WebUI data path shells out to:
 
 ```bash
 mbimcli -d /dev/cdc-wdm0 --simple-connect="apn='your.apn'"
 mbimcli -d /dev/cdc-wdm0 --disconnect
 ```
 
-IP configuration of `wwan0` may still need NetworkManager, `dhcpcd`, or a local script.
+RNDIS path uses `ip link` + `dhclient`/`dhcpcd` and shows assigned IPv4 on the inventory label when present.
 
 ## Run
 
@@ -78,9 +102,18 @@ go run ./cmd/app -no-elevate
 The dashboard **Modem** card lists discovered USB/serial devices:
 
 1. Choose **Device** and **AT port** → **Use selected** (binds AT monitoring).
-2. **MBIM device** dropdown (if `/dev/cdc-wdm*` exists) → **Connect** for data bearer.
+2. **Data Bearer** card lists **RNDIS** network interfaces (e.g. `enx…`) and/or **MBIM** (`/dev/cdc-wdm*`).
 
-If MBIM list is empty, the modem is likely **AT-only** composition (no `cdc_mbim`). Signal/SIM/APN still work over the selected AT port.
+#### Why “MBIM device none found” on FM350-GL
+
+Many FM350 USB compositions are **RNDIS + multi-serial**, not MBIM:
+
+| Composition | Kernel | Data UI |
+|-------------|--------|---------|
+| RNDIS (common) | `rndis_host` + `option` (`ttyUSB*`) | Use **RNDIS** iface (e.g. `enx000011121314`) |
+| MBIM | `cdc_mbim` → `/dev/cdc-wdm0` | Use MBIM + `mbimcli` |
+
+Apply APN with AT first, then **Data Bearer → Connect** (RNDIS: `ip link up` + DHCP).
 
 ### Permission denied on `/dev/ttyUSB*`
 

@@ -20,6 +20,10 @@ const (
 	CmdICCID    = "AT+ICCID"
 	CmdCGDCONTQ = "AT+CGDCONT?"
 	CmdGTACTQ   = "AT+GTACT?"
+	CmdGTUSBMODEQ = "AT+GTUSBMODE?"
+	// Proprietary Fibocom signal / cell info (fallback when CESQ is empty).
+	CmdGTCAINFO = "AT+GTCAINFO?"
+	CmdGTCCINFO = "AT+GTCCINFO?"
 
 	ATResultOK    = "OK"
 	ATResultERROR = "ERROR"
@@ -45,4 +49,9 @@ func CmdCGDCONTSet(cid int, pdp domain.PDPType, apn string) string {
 // CmdGTACTSet builds AT+GTACT=<code>.
 func CmdGTACTSet(code int) string {
 	return fmt.Sprintf("AT+GTACT=%d", code)
+}
+
+// CmdGTUSBMODESet builds AT+GTUSBMODE=<mode>.
+func CmdGTUSBMODESet(mode int) string {
+	return fmt.Sprintf("AT+GTUSBMODE=%d", mode)
 }

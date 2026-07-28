@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,10 +28,19 @@ func main() {
 	historyFile := flag.String("history-file", "", "Optional JSON file to load/save signal history")
 	historySaveEvery := flag.Duration("history-save", appdefaults.HistorySave, "How often to persist history when -history-file is set")
 	noElevate := flag.Bool("no-elevate", false, "Do not re-exec with sudo when not root")
+	apiToken := flag.String("token", "", "Optional shared API token (or env FM350_API_TOKEN); protects WebUI + API")
 	flag.Parse()
 
 	// Re-exec under sudo when needed (serial, sysfs, USBDEVFS_RESET).
 	maybeElevate(*noElevate)
+
+	token := strings.TrimSpace(*apiToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("FM350_API_TOKEN"))
+	}
+	if token != "" {
+		log.Printf("[INFO] API token auth enabled (Authorization Bearer / X-API-Token / ?token=)")
+	}
 
 	log.Println("Starting FM350-GL USB Modem Manager & Watchdog...")
 
@@ -77,6 +87,7 @@ func main() {
 		AT:       atClient,
 		History:  hist,
 		MBIM:     repository.NewMBIM(),
+		Net:      repository.NewNetRepo(),
 		Discover: usecase.DiscoverFunc(repository.DiscoverATPort),
 		Inventory: usecase.InventoryFuncs{
 			ListModemsFn:      repository.ListModems,
@@ -112,7 +123,7 @@ func main() {
 
 	go func() { svc.Status() }()
 
-	httpHandler := handler.NewServer(svc)
+	httpHandler := handler.NewServer(svc, token)
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	httpServer := &http.Server{
 		Addr:         addr,

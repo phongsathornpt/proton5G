@@ -67,12 +67,36 @@ func ParseCESQ(response string) (rsrp, rsrq int, ok bool) {
 	return 0, 0, false
 }
 
-// MergeExtendedSignal fills RSRP/RSRQ from CESQ and optionally improves percentage from RSRP.
-func MergeExtendedSignal(base domain.SignalInfo, cesqResp string) domain.SignalInfo {
-	rsrp, rsrq, ok := ParseCESQ(cesqResp)
-	if !ok {
+// MergeExtendedSignal fills RSRP/RSRQ from CESQ, then Fibocom proprietary
+// AT+GTCAINFO? / AT+GTCCINFO? when CESQ is missing or unknown.
+func MergeExtendedSignal(base domain.SignalInfo, cesqResp string, proprietary ...string) domain.SignalInfo {
+	if rsrp, rsrq, ok := ParseCESQ(cesqResp); ok {
+		base = applyRSRPRSRQ(base, rsrp, rsrq)
+	}
+	if base.RSRP != 0 {
 		return base
 	}
+	for _, raw := range proprietary {
+		if raw == "" {
+			continue
+		}
+		if rsrp, rsrq, ok := ParseGTCAINFO(raw); ok {
+			base = applyRSRPRSRQ(base, rsrp, rsrq)
+			if base.RSRP != 0 {
+				return base
+			}
+		}
+		if rsrp, rsrq, ok := ParseGTCCINFO(raw); ok {
+			base = applyRSRPRSRQ(base, rsrp, rsrq)
+			if base.RSRP != 0 {
+				return base
+			}
+		}
+	}
+	return base
+}
+
+func applyRSRPRSRQ(base domain.SignalInfo, rsrp, rsrq int) domain.SignalInfo {
 	if rsrp != 0 {
 		base.RSRP = rsrp
 		pct := int(float64(rsrp-(RSRPMinDBm)) / float64(-44-(RSRPMinDBm)) * 100.0)
@@ -93,6 +117,158 @@ func MergeExtendedSignal(base domain.SignalInfo, cesqResp string) domain.SignalI
 		base.RSRQ = rsrq
 	}
 	return base
+}
+
+// ParseGTCAINFO extracts RSRP/RSRQ from Fibocom AT+GTCAINFO? output.
+// Examples:
+//
+//	PCC:5078,940,641760,450,2,1,1,3,19,-1,-80
+//	SCC 3:…,13,-9,-81
+//
+// Trailing values in typical RSRP (-140..-44) / RSRQ (-20..0) ranges are used.
+func ParseGTCAINFO(response string) (rsrp, rsrq int, ok bool) {
+	bestRSRP := 0
+	bestRSRQ := 0
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		upper := strings.ToUpper(line)
+		if !strings.Contains(upper, "PCC:") && !strings.Contains(upper, "SCC") {
+			// also accept bare +GTCAINFO data lines without prefix after strip
+			if !strings.Contains(line, ",") {
+				continue
+			}
+		}
+		// Normalize "PCC:a,b" → fields
+		if i := strings.Index(line, ":"); i >= 0 && (strings.HasPrefix(upper, "PCC") || strings.HasPrefix(upper, "SCC") || strings.HasPrefix(upper, "+GTCAINFO")) {
+			line = line[i+1:]
+		}
+		nums := parseSignedInts(line)
+		if len(nums) == 0 {
+			continue
+		}
+		// Prefer trailing candidates in valid ranges.
+		lineRSRP, lineRSRQ := 0, 0
+		for i := len(nums) - 1; i >= 0; i-- {
+			n := nums[i]
+			if lineRSRP == 0 && n >= -140 && n <= -44 {
+				lineRSRP = n
+				continue
+			}
+			if lineRSRQ == 0 && n >= -20 && n <= 0 && n != -1 {
+				lineRSRQ = n
+			}
+		}
+		if lineRSRP != 0 && (bestRSRP == 0 || lineRSRP > bestRSRP) {
+			bestRSRP = lineRSRP
+			if lineRSRQ != 0 {
+				bestRSRQ = lineRSRQ
+			}
+		}
+	}
+	if bestRSRP == 0 {
+		return 0, 0, false
+	}
+	return bestRSRP, bestRSRQ, true
+}
+
+// ParseGTCCINFO best-effort extracts RSRP from AT+GTCCINFO? cell lines.
+// Example: 1,4,262,1,05D5,0019BF801,1300,358,103,100,13,60,60,22
+// Trailing decimal fields in 0..97 are treated as 3GPP CESQ-style RSRP raw.
+func ParseGTCCINFO(response string) (rsrp, rsrq int, ok bool) {
+	best := 0
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == ATResultOK || line == ATResultERROR {
+			continue
+		}
+		if strings.HasPrefix(line, "+GTCCINFO") {
+			continue
+		}
+		// Skip hex-heavy tokens; only pure decimal fields at the end matter.
+		parts := strings.Split(line, ",")
+		var dec []int
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			// pure decimal (optional leading minus)
+			n, err := strconv.Atoi(p)
+			if err != nil {
+				dec = nil // reset run of trailing decimals after non-decimal
+				continue
+			}
+			dec = append(dec, n)
+		}
+		// Among trailing decimals in CESQ RSRP raw range, pick strongest (max raw).
+		// Example ends with …,13,60,60,22 → prefer 60 (-80 dBm) over 22.
+		rawBest := -1
+		for i := len(dec) - 1; i >= 0 && i >= len(dec)-4; i-- {
+			raw := dec[i]
+			if raw >= 0 && raw <= RSRPMaxRaw && raw != CESQUnknown {
+				if raw > rawBest {
+					rawBest = raw
+				}
+			}
+		}
+		if rawBest >= 0 {
+			v := RSRPMinDBm + rawBest
+			if best == 0 || v > best {
+				best = v
+			}
+		}
+	}
+	if best == 0 {
+		return 0, 0, false
+	}
+	return best, 0, true
+}
+
+func parseSignedInts(s string) []int {
+	var out []int
+	cur := ""
+	flush := func() {
+		if cur == "" || cur == "-" {
+			cur = ""
+			return
+		}
+		n, err := strconv.Atoi(cur)
+		if err == nil {
+			out = append(out, n)
+		}
+		cur = ""
+	}
+	for _, r := range s {
+		if r == '-' || (r >= '0' && r <= '9') {
+			if r == '-' && cur != "" {
+				flush()
+			}
+			cur += string(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return out
+}
+
+// ParseGTUSBMODE parses +GTUSBMODE: <n>
+func ParseGTUSBMODE(response string) int {
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "+GTUSBMODE:") {
+			continue
+		}
+		val := strings.TrimSpace(strings.TrimPrefix(line, "+GTUSBMODE:"))
+		if i := strings.IndexAny(val, ",; "); i > 0 {
+			val = val[:i]
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(val))
+		if err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 const unknownOperator = "Unknown Operator"

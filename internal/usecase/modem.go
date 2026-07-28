@@ -18,6 +18,7 @@ type ModemService struct {
 	at        ATRepository
 	history   HistoryRepository
 	mbim      MBIMRepository
+	net       NetRepository
 	discover  ATDiscoverer
 	inventory DeviceInventory
 	vendor    string
@@ -27,6 +28,7 @@ type ModemService struct {
 	status          domain.FullStatus
 	selectedModemID string
 	selectedMBIM    string
+	selectedNet     string
 	atFailStreak    int
 	lastResetAt     time.Time
 	lastRediscover  time.Time
@@ -41,6 +43,7 @@ type ModemServiceConfig struct {
 	AT        ATRepository
 	History   HistoryRepository
 	MBIM      MBIMRepository
+	Net       NetRepository
 	Discover  ATDiscoverer
 	Inventory DeviceInventory
 	Vendor    string
@@ -59,6 +62,7 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 		at:              cfg.AT,
 		history:         cfg.History,
 		mbim:            cfg.MBIM,
+		net:             cfg.Net,
 		discover:        cfg.Discover,
 		inventory:       cfg.Inventory,
 		vendor:          cfg.Vendor,
@@ -291,8 +295,8 @@ func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemI
 	defer s.mu.Unlock()
 
 	inv := s.buildInventoryLocked()
-	if req.ModemID == "" && req.ATPort == "" && req.MBIMDevice == "" {
-		return inv, fmt.Errorf("modem_id, at_port, or mbim_device required")
+	if req.ModemID == "" && req.ATPort == "" && req.MBIMDevice == "" && req.NetIface == "" {
+		return inv, fmt.Errorf("modem_id, at_port, mbim_device, or net_iface required")
 	}
 
 	var modem domain.ModemDevice
@@ -370,6 +374,21 @@ func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemI
 		}
 	}
 
+	if req.NetIface != "" {
+		s.selectedNet = req.NetIface
+	} else if ok && len(modem.NetIfaces) > 0 {
+		keep := false
+		for _, n := range modem.NetIfaces {
+			if n.Path == s.selectedNet {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			s.selectedNet = modem.NetIfaces[0].Path
+		}
+	}
+
 	if atPort != "" && s.at != nil {
 		if s.at.PortName() != atPort {
 			log.Printf("[INFO] User selected AT port %s (modem %s)", atPort, s.selectedModemID)
@@ -438,15 +457,18 @@ func (s *ModemService) buildInventoryLocked() domain.ModemInventory {
 		}
 	}
 
-	// Count MBIM nodes
-	mbimCount := 0
+	mbimCount, netCount := 0, 0
 	for _, m := range modems {
 		mbimCount += len(m.MBIMNodes)
+		netCount += len(m.NetIfaces)
 	}
 	note := ""
-	if mbimCLI && mbimCount == 0 {
-		note = "No /dev/cdc-wdm* found. You can still select an AT port for signal/SIM/APN. MBIM data needs cdc_mbim mode."
-	} else if !mbimCLI {
+	switch {
+	case netCount > 0 && mbimCount == 0:
+		note = "Modem is in RNDIS mode (no /dev/cdc-wdm*). Use the RNDIS network interface for data; MBIM is N/A until USB composition changes."
+	case mbimCLI && mbimCount == 0 && netCount == 0:
+		note = "No MBIM or RNDIS data interface found. AT monitoring still works."
+	case !mbimCLI && mbimCount > 0:
 		note = "mbimcli missing — install libmbim-utils for MBIM connect."
 	}
 
@@ -458,16 +480,177 @@ func (s *ModemService) buildInventoryLocked() domain.ModemInventory {
 			}
 		}
 	}
+	if s.selectedNet == "" && netCount > 0 {
+		for _, m := range modems {
+			if len(m.NetIfaces) > 0 {
+				s.selectedNet = m.NetIfaces[0].Path
+				break
+			}
+		}
+	}
 
 	return domain.ModemInventory{
 		Modems:          modems,
 		SelectedModemID: s.selectedModemID,
 		SelectedATPort:  openAT,
 		SelectedMBIM:    s.selectedMBIM,
+		SelectedNet:     s.selectedNet,
 		MBIMCLI:         mbimCLI,
 		InstallHint:     hint,
 		Note:            note,
 	}
+}
+
+// DataConnect brings up RNDIS (DHCP) or MBIM based on mode.
+func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	iface := strings.TrimSpace(req.Iface)
+
+	s.mu.RLock()
+	if iface == "" {
+		switch mode {
+		case domain.DataModeRNDIS, "net":
+			iface = s.selectedNet
+		case domain.DataModeMBIM:
+			iface = s.selectedMBIM
+		default:
+			// auto: prefer RNDIS if selected, else MBIM
+			if s.selectedNet != "" {
+				mode = domain.DataModeRNDIS
+				iface = s.selectedNet
+			} else if s.selectedMBIM != "" {
+				mode = domain.DataModeMBIM
+				iface = s.selectedMBIM
+			}
+		}
+	}
+	apn := req.APN
+	if apn == "" {
+		apn = s.status.APN.APN
+	}
+	s.mu.RUnlock()
+
+	if mode == "" || mode == "auto" {
+		if strings.HasPrefix(iface, "/dev/cdc-wdm") {
+			mode = domain.DataModeMBIM
+		} else if iface != "" {
+			mode = domain.DataModeRNDIS
+		}
+	}
+
+	switch mode {
+	case domain.DataModeRNDIS, "net":
+		if iface == "" {
+			return "", fmt.Errorf("no RNDIS/net interface selected (modem has no network iface under USB)")
+		}
+		if s.net == nil {
+			return "", fmt.Errorf("RNDIS net helper not configured")
+		}
+		return s.net.ConnectRNDIS(iface)
+	case domain.DataModeMBIM:
+		if s.mbim == nil {
+			return "", errModemUnavailable
+		}
+		if iface == "" {
+			return "", fmt.Errorf("no MBIM device selected (no /dev/cdc-wdm*)")
+		}
+		return s.mbim.Connect(iface, apn)
+	default:
+		return "", fmt.Errorf("unknown data mode %q (use rndis or mbim)", mode)
+	}
+}
+
+// DataDisconnect tears down RNDIS or MBIM session.
+func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	iface := strings.TrimSpace(req.Iface)
+	s.mu.RLock()
+	if iface == "" {
+		if mode == domain.DataModeRNDIS || mode == "net" || mode == "" {
+			iface = s.selectedNet
+			if mode == "" && iface != "" {
+				mode = domain.DataModeRNDIS
+			}
+		}
+		if iface == "" || mode == domain.DataModeMBIM {
+			if s.selectedMBIM != "" && (mode == domain.DataModeMBIM || mode == "") {
+				iface = s.selectedMBIM
+				mode = domain.DataModeMBIM
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	switch mode {
+	case domain.DataModeRNDIS, "net":
+		if iface == "" {
+			return "", fmt.Errorf("no RNDIS/net interface selected")
+		}
+		if s.net == nil {
+			return "", fmt.Errorf("RNDIS net helper not configured")
+		}
+		return s.net.DisconnectRNDIS(iface)
+	case domain.DataModeMBIM:
+		if s.mbim == nil {
+			return "", errModemUnavailable
+		}
+		return s.mbim.Disconnect(iface)
+	default:
+		return "", fmt.Errorf("unknown data mode %q", mode)
+	}
+}
+
+// USBMode queries AT+GTUSBMODE? and returns known profiles for the UI.
+func (s *ModemService) USBMode() domain.USBModeInfo {
+	info := domain.USBModeInfo{
+		Supported: domain.KnownUSBModes(),
+		Note:      "Stock FM350 USB modes 40/41 are RNDIS+serial (not MBIM). Changing mode re-enumerates USB; reconnect may take a few seconds.",
+	}
+	if s.at == nil {
+		info.Error = "AT client unavailable"
+		return info
+	}
+	mode, err := s.at.GetUSBMode()
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+	info.Mode = mode
+	info.Label = domain.USBModeLabel(mode)
+	return info
+}
+
+// SetUSBMode applies AT+GTUSBMODE=<mode>, closes the AT port, and schedules rediscovery.
+func (s *ModemService) SetUSBMode(mode int) (domain.USBModeInfo, error) {
+	if mode <= 0 {
+		return s.USBMode(), fmt.Errorf("invalid mode %d", mode)
+	}
+	if s.at == nil {
+		return domain.USBModeInfo{Supported: domain.KnownUSBModes()}, errModemUnavailable
+	}
+	if err := s.at.SetUSBMode(mode); err != nil {
+		info := s.USBMode()
+		return info, err
+	}
+	log.Printf("[INFO] USB composition set to GTUSBMODE=%d — waiting for re-enumeration", mode)
+	// Allow device to reappear before status polls thrash.
+	time.Sleep(2 * time.Second)
+	s.mu.Lock()
+	s.lastRediscover = time.Time{} // allow immediate rediscover on next failure
+	s.mu.Unlock()
+	if s.discover != nil {
+		s.mu.Lock()
+		s.rediscoverATPortLocked()
+		s.mu.Unlock()
+	}
+	info := s.USBMode()
+	if info.Mode == 0 {
+		// Query may fail mid-reenumerate; report requested mode.
+		info.Mode = mode
+		info.Label = domain.USBModeLabel(mode)
+		info.Note = "Mode command accepted; if query is empty, refresh after re-enumeration."
+	}
+	return info, nil
 }
 
 // RunWatchdog periodically enforces USB power policy until ctx is cancelled.

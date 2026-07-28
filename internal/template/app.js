@@ -2,8 +2,35 @@ let evtSource = null;
 let historyPoints = [];
 let modemInventory = null;
 
+// Optional API token: ?token=… or localStorage fm350_token (for -token / FM350_API_TOKEN).
+const API_TOKEN = (function () {
+    try {
+        const q = new URLSearchParams(location.search).get('token');
+        if (q) {
+            localStorage.setItem('fm350_token', q);
+            return q;
+        }
+        return localStorage.getItem('fm350_token') || '';
+    } catch (e) {
+        return '';
+    }
+})();
+
+function apiHeaders(json) {
+    const h = {};
+    if (json) h['Content-Type'] = 'application/json';
+    if (API_TOKEN) h['X-API-Token'] = API_TOKEN;
+    return h;
+}
+
+function apiURL(path) {
+    if (!API_TOKEN) return path;
+    const sep = path.indexOf('?') >= 0 ? '&' : '?';
+    return path + sep + 'token=' + encodeURIComponent(API_TOKEN);
+}
+
 function initSSE() {
-    evtSource = new EventSource('/api/events');
+    evtSource = new EventSource(apiURL('/api/events'));
 
     evtSource.onmessage = function(event) {
         try {
@@ -40,9 +67,10 @@ function initSSE() {
 
     refreshHistory();
     refreshModems();
-    refreshMBIM();
+    refreshUSBMode();
     setInterval(refreshHistory, 15000);
     setInterval(refreshModems, 10000);
+    setInterval(refreshUSBMode, 30000);
 }
 
 function findModemById(id) {
@@ -74,7 +102,7 @@ function fillSelect(sel, options, selected) {
     }
 }
 
-function fillATAndMBIMForModem(modem) {
+function fillATAndDataForModem(modem) {
     const atOpts = (modem && modem.at_ports ? modem.at_ports : []).map(p => ({
         value: p.path,
         label: p.label || p.path
@@ -85,28 +113,71 @@ function fillATAndMBIMForModem(modem) {
     }
     fillSelect(document.getElementById('at-port-select'), atOpts, atSelected);
 
-    const mbimOpts = (modem && modem.mbim_nodes ? modem.mbim_nodes : []).map(p => ({
-        value: p.path,
-        label: p.label || p.path
-    }));
-    // Also collect all MBIM from inventory if this modem has none
-    if (!mbimOpts.length && modemInventory && modemInventory.modems) {
+    // Data interfaces: prefer RNDIS net ifaces, else MBIM nodes
+    const dataOpts = [];
+    (modem && modem.net_ifaces ? modem.net_ifaces : []).forEach(p => {
+        dataOpts.push({
+            value: 'rndis:' + p.path,
+            label: p.label || (p.path + ' (RNDIS)'),
+            mode: 'rndis',
+            iface: p.path
+        });
+    });
+    (modem && modem.mbim_nodes ? modem.mbim_nodes : []).forEach(p => {
+        dataOpts.push({
+            value: 'mbim:' + p.path,
+            label: p.label || (p.path + ' (MBIM)'),
+            mode: 'mbim',
+            iface: p.path
+        });
+    });
+    // Fallback: collect from all modems if current has none
+    if (!dataOpts.length && modemInventory && modemInventory.modems) {
         modemInventory.modems.forEach(m => {
+            (m.net_ifaces || []).forEach(p => {
+                dataOpts.push({
+                    value: 'rndis:' + p.path,
+                    label: (m.name ? m.name + ' · ' : '') + (p.label || p.path),
+                    mode: 'rndis',
+                    iface: p.path
+                });
+            });
             (m.mbim_nodes || []).forEach(p => {
-                if (!mbimOpts.some(o => o.value === p.path)) {
-                    mbimOpts.push({value: p.path, label: p.label || p.path});
-                }
+                dataOpts.push({
+                    value: 'mbim:' + p.path,
+                    label: (m.name ? m.name + ' · ' : '') + (p.label || p.path),
+                    mode: 'mbim',
+                    iface: p.path
+                });
             });
         });
     }
-    fillSelect(document.getElementById('mbim-select'), mbimOpts, modemInventory && modemInventory.selected_mbim);
-    const btn = document.getElementById('mbim-connect-btn');
-    if (btn) btn.disabled = mbimOpts.length === 0;
+
+    let dataSelected = '';
+    if (modemInventory && modemInventory.selected_net) {
+        dataSelected = 'rndis:' + modemInventory.selected_net;
+    } else if (modemInventory && modemInventory.selected_mbim) {
+        dataSelected = 'mbim:' + modemInventory.selected_mbim;
+    }
+    fillSelect(document.getElementById('data-iface-select'), dataOpts.map(o => ({
+        value: o.value,
+        label: o.label
+    })), dataSelected);
+
+    // stash full option meta for connect
+    window.__dataIfaceOptions = dataOpts;
+
+    const modeEl = document.getElementById('data-mode');
+    if (modeEl) {
+        modeEl.innerText = (modem && modem.data_mode) ? modem.data_mode : (dataOpts.length ? 'available' : 'none');
+    }
+    const btn = document.getElementById('data-connect-btn');
+    if (btn) btn.disabled = dataOpts.length === 0;
 }
 
 function onModemDropdownChange() {
     const id = document.getElementById('modem-select').value;
-    fillATAndMBIMForModem(findModemById(id));
+    fillATAndDataForModem(findModemById(id));
 }
 
 function applyInventoryToUI(data) {
@@ -114,15 +185,17 @@ function applyInventoryToUI(data) {
     const modemOpts = (data.modems || []).map(m => {
         const atN = (m.at_ports || []).length;
         const mbN = (m.mbim_nodes || []).length;
+        const netN = (m.net_ifaces || []).length;
         let label = m.name || m.id;
         label += ` — ${atN} AT`;
+        if (netN) label += `, ${netN} net`;
         if (mbN) label += `, ${mbN} MBIM`;
         return {value: m.id, label};
     });
     fillSelect(document.getElementById('modem-select'), modemOpts, data.selected_modem_id);
     const modem = findModemById(document.getElementById('modem-select').value) ||
         (data.modems && data.modems[0]) || null;
-    fillATAndMBIMForModem(modem);
+    fillATAndDataForModem(modem);
 
     const hint = document.getElementById('modem-hint');
     if (hint) {
@@ -134,39 +207,112 @@ function applyInventoryToUI(data) {
             hint.textContent = 'Select a modem and AT port, then Use selected to connect monitoring.';
         }
     }
+
+    document.getElementById('mbim-cli').innerText = data.mbimcli_available ? 'available' : 'missing';
+    const dataHint = document.getElementById('data-hint');
+    if (dataHint) {
+        if (data.note) {
+            dataHint.textContent = data.note;
+        } else {
+            dataHint.innerHTML = 'Apply APN via AT first. <strong>RNDIS</strong>: DHCP on net iface. <strong>MBIM</strong>: needs <code>/dev/cdc-wdm*</code> + mbimcli.';
+        }
+    }
 }
 
 async function refreshModems() {
     try {
-        const resp = await fetch('/api/modems');
+        const resp = await fetch(apiURL('/api/modems'), {headers: apiHeaders(false)});
+        if (resp.status === 401) {
+            logConsole('Unauthorized — open UI with ?token=YOUR_TOKEN or set localStorage fm350_token');
+            return;
+        }
         const data = await resp.json();
         applyInventoryToUI(data);
-        // Keep MBIM panel in sync
-        document.getElementById('mbim-cli').innerText = data.mbimcli_available ? 'available' : 'missing';
-        const mbimHint = document.getElementById('mbim-hint');
-        if (mbimHint) {
-            if (!data.mbimcli_available && data.install_hint) {
-                mbimHint.innerHTML = `Install helper: <code>${data.install_hint}</code> then restart.`;
-            } else if (data.note && data.mbimcli_available) {
-                mbimHint.textContent = data.note;
-            } else {
-                mbimHint.innerHTML = `Choose MBIM device (if any) then Connect. Needs <code>mbimcli</code> + <code>/dev/cdc-wdm*</code>.`;
-            }
-        }
     } catch (e) {
         console.error('refreshModems', e);
     }
 }
 
+async function refreshUSBMode() {
+    const el = document.getElementById('usb-mode-current');
+    const sel = document.getElementById('usb-mode-select');
+    if (!el && !sel) return;
+    try {
+        const resp = await fetch(apiURL('/api/usbmode'), {headers: apiHeaders(false)});
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (el) {
+            el.innerText = data.mode
+                ? (data.label || ('mode ' + data.mode))
+                : (data.error || 'unknown');
+        }
+        if (sel && data.supported) {
+            const prev = sel.value;
+            sel.innerHTML = '';
+            data.supported.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = String(o.mode);
+                opt.textContent = o.label || String(o.mode);
+                sel.appendChild(opt);
+            });
+            if (data.mode) sel.value = String(data.mode);
+            else if (prev) sel.value = prev;
+        }
+        const note = document.getElementById('usb-mode-hint');
+        if (note && data.note) note.textContent = data.note;
+    } catch (e) {
+        // ignore
+    }
+}
+
+async function applyUSBMode() {
+    const sel = document.getElementById('usb-mode-select');
+    const mode = sel ? parseInt(sel.value, 10) : 0;
+    if (!mode) {
+        logConsole('USB mode: pick a mode first');
+        return;
+    }
+    if (!confirm('Set AT+GTUSBMODE=' + mode + '? Modem USB will re-enumerate (brief disconnect).')) return;
+    try {
+        const resp = await fetch(apiURL('/api/usbmode'), {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify({mode: mode})
+        });
+        const res = await resp.json();
+        logConsole('USB mode: ' + (res.status || res.error || '') + ' → ' +
+            JSON.stringify(res.usb_mode || {}));
+        setTimeout(() => { refreshUSBMode(); refreshModems(); }, 3000);
+    } catch (e) {
+        logConsole('USB mode error: ' + e);
+    }
+}
+
+function parseDataIfaceSelection() {
+    const val = document.getElementById('data-iface-select').value || '';
+    const opts = window.__dataIfaceOptions || [];
+    const hit = opts.find(o => o.value === val);
+    if (hit) return {mode: hit.mode, iface: hit.iface};
+    if (val.startsWith('rndis:')) return {mode: 'rndis', iface: val.slice(6)};
+    if (val.startsWith('mbim:')) return {mode: 'mbim', iface: val.slice(5)};
+    return {mode: '', iface: val};
+}
+
 async function applyModemSelection() {
     const modem_id = document.getElementById('modem-select').value;
     const at_port = document.getElementById('at-port-select').value;
-    const mbim_device = document.getElementById('mbim-select').value;
+    const dataSel = parseDataIfaceSelection();
+    const body = {
+        modem_id,
+        at_port,
+        mbim_device: dataSel.mode === 'mbim' ? dataSel.iface : '',
+        net_iface: dataSel.mode === 'rndis' ? dataSel.iface : ''
+    };
     try {
-        const resp = await fetch('/api/modems/select', {
+        const resp = await fetch(apiURL('/api/modems/select'), {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({modem_id, at_port, mbim_device})
+            headers: apiHeaders(true),
+            body: JSON.stringify(body)
         });
         const data = await resp.json();
         if (!resp.ok) {
@@ -174,12 +320,50 @@ async function applyModemSelection() {
             return;
         }
         applyInventoryToUI(data);
-        logConsole(`Using modem ${data.selected_modem_id || modem_id} AT=${data.selected_at_port || at_port || '-'}`);
-        // Force a status refresh via status endpoint
-        const st = await fetch('/api/status');
+        logConsole(`Using modem ${data.selected_modem_id || modem_id} AT=${data.selected_at_port || at_port || '-'} data=${data.selected_net || data.selected_mbim || '-'}`);
+        const st = await fetch(apiURL('/api/status'), {headers: apiHeaders(false)});
         if (st.ok) updateUI(await st.json());
     } catch (e) {
         logConsole(`Select modem error: ${e}`);
+    }
+}
+
+async function dataConnect() {
+    const apn = document.getElementById('apn-name').value || '';
+    const sel = parseDataIfaceSelection();
+    if (!sel.iface) {
+        logConsole('Data connect: no interface — modem may only expose AT ports');
+        return;
+    }
+    try {
+        // Persist selection first
+        await applyModemSelection();
+        const resp = await fetch(apiURL('/api/data/connect'), {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify({mode: sel.mode, iface: sel.iface, apn: apn})
+        });
+        const res = await resp.json();
+        logConsole(`Data connect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\n${res.output || ''}`);
+        refreshModems();
+    } catch (e) {
+        logConsole(`Data connect error: ${e}`);
+    }
+}
+
+async function dataDisconnect() {
+    const sel = parseDataIfaceSelection();
+    try {
+        const resp = await fetch(apiURL('/api/data/disconnect'), {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify({mode: sel.mode, iface: sel.iface})
+        });
+        const res = await resp.json();
+        logConsole(`Data disconnect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\n${res.output || ''}`);
+        refreshModems();
+    } catch (e) {
+        logConsole(`Data disconnect error: ${e}`);
     }
 }
 
@@ -240,9 +424,9 @@ function updateUI(data) {
 
 async function setRAT(mode) {
     try {
-        const resp = await fetch('/api/rat', {
+        const resp = await fetch(apiURL('/api/rat'), {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: apiHeaders(true),
             body: JSON.stringify({mode: mode})
         });
         const res = await resp.json();
@@ -258,9 +442,9 @@ async function updateAPN(event) {
     const name = document.getElementById('apn-name').value;
 
     try {
-        const resp = await fetch('/api/apn', {
+        const resp = await fetch(apiURL('/api/apn'), {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: apiHeaders(true),
             body: JSON.stringify({cid: 1, pdp_type: type, apn: name})
         });
         const res = await resp.json();
@@ -280,9 +464,9 @@ async function sendRawAT(event) {
     input.value = '';
 
     try {
-        const resp = await fetch('/api/raw', {
+        const resp = await fetch(apiURL('/api/raw'), {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: apiHeaders(true),
             body: JSON.stringify({command: cmd})
         });
         const res = await resp.json();
@@ -295,7 +479,10 @@ async function sendRawAT(event) {
 async function usbReset() {
     if (!confirm('Issue USBDEVFS_RESET to the modem?')) return;
     try {
-        const resp = await fetch('/api/reset', {method: 'POST'});
+        const resp = await fetch(apiURL('/api/reset'), {
+            method: 'POST',
+            headers: apiHeaders(false)
+        });
         const res = await resp.json();
         logConsole(`USB reset: ${res.status || res.error}`);
     } catch (e) {
@@ -303,71 +490,9 @@ async function usbReset() {
     }
 }
 
-async function refreshMBIM() {
-    try {
-        const resp = await fetch('/api/mbim');
-        const data = await resp.json();
-        document.getElementById('mbim-cli').innerText = data.mbimcli_available ? 'available' : 'missing';
-        const devices = data.devices || (data.device ? [data.device] : []);
-        const opts = devices.map(d => ({value: d, label: d}));
-        fillSelect(document.getElementById('mbim-select'), opts, data.selected || data.device);
-        const btn = document.getElementById('mbim-connect-btn');
-        if (btn) btn.disabled = opts.length === 0;
-        const hint = document.getElementById('mbim-hint');
-        if (hint) {
-            if (!data.mbimcli_available && data.install_hint) {
-                hint.innerHTML = `Install helper: <code>${data.install_hint}</code> then restart the manager.`;
-            } else if (data.mbimcli_available && !data.device_present) {
-                hint.textContent = data.note || 'mbimcli OK, but no /dev/cdc-wdm* — modem may not be in MBIM mode. Use AT port above for monitoring.';
-            } else {
-                hint.innerHTML = `Select MBIM device then Connect. Requires <code>mbimcli</code> + <code>/dev/cdc-wdm*</code>.`;
-            }
-        }
-    } catch (e) {
-        document.getElementById('mbim-cli').innerText = 'error';
-    }
-}
-
-async function mbimConnect() {
-    const apn = document.getElementById('apn-name').value || '';
-    const device = document.getElementById('mbim-select').value || '';
-    if (!device) {
-        logConsole('MBIM connect: no /dev/cdc-wdm* selected — modem may be AT-only');
-        return;
-    }
-    try {
-        const resp = await fetch('/api/mbim/connect', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({apn: apn, device: device})
-        });
-        const res = await resp.json();
-        logConsole(`MBIM connect: ${res.status || res.error || ''}\n${res.output || ''}`);
-        refreshMBIM();
-    } catch (e) {
-        logConsole(`MBIM connect error: ${e}`);
-    }
-}
-
-async function mbimDisconnect() {
-    const device = document.getElementById('mbim-select').value || '';
-    try {
-        const resp = await fetch('/api/mbim/disconnect', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({device: device})
-        });
-        const res = await resp.json();
-        logConsole(`MBIM disconnect: ${res.status || res.error || ''}\n${res.output || ''}`);
-        refreshMBIM();
-    } catch (e) {
-        logConsole(`MBIM disconnect error: ${e}`);
-    }
-}
-
 async function refreshHistory() {
     try {
-        const resp = await fetch('/api/history');
+        const resp = await fetch(apiURL('/api/history'), {headers: apiHeaders(false)});
         const data = await resp.json();
         if (Array.isArray(data) && data.length) {
             historyPoints = data;

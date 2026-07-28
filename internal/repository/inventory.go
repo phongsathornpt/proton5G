@@ -119,6 +119,48 @@ func mbimNodesUnder(sysPath string) []string {
 	return uniqueSorted(names)
 }
 
+// netIfacesUnder finds network interface names under a USB device (RNDIS/ECM/NCM).
+func netIfacesUnder(sysPath string) []string {
+	var names []string
+	_ = filepath.Walk(sysPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		// .../net/<ifname>
+		if info.IsDir() && info.Name() == "net" {
+			entries, _ := os.ReadDir(path)
+			for _, e := range entries {
+				if e.IsDir() {
+					names = append(names, e.Name())
+				}
+			}
+		}
+		return nil
+	})
+	return uniqueSorted(names)
+}
+
+func netIfaceState(name string) string {
+	b, err := os.ReadFile(filepath.Join("/sys/class/net", name, "operstate"))
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func detectDataMode(mbimCount, netCount int) string {
+	switch {
+	case mbimCount > 0 && netCount > 0:
+		return domain.DataModeMixed
+	case mbimCount > 0:
+		return domain.DataModeMBIM
+	case netCount > 0:
+		return domain.DataModeRNDIS
+	default:
+		return domain.DataModeATOnly
+	}
+}
+
 func uniqueSorted(in []string) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -185,7 +227,7 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 		}
 		ttys := ttyNodesUnder(sys)
 		mbims := mbimNodesUnder(sys)
-		// If walk found nothing, still allow global assignment later.
+		nets := netIfacesUnder(sys)
 
 		var atIfaces []domain.ModemInterface
 		for _, t := range ttys {
@@ -213,10 +255,34 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 			})
 		}
 
+		var netIfaces []domain.ModemInterface
+		for _, n := range nets {
+			st := netIfaceState(n)
+			label := fmt.Sprintf("%s (RNDIS/net, %s)", n, st)
+			if addrs := NetIfaceAddrs(n); len(addrs) > 0 {
+				label = fmt.Sprintf("%s (RNDIS/net, %s, %s)", n, st, strings.Join(addrs, ", "))
+			}
+			netIfaces = append(netIfaces, domain.ModemInterface{
+				Path:  n,
+				Kind:  domain.IfaceKindNet,
+				Label: label,
+				State: st,
+			})
+		}
+
 		base := filepath.Base(sys)
 		name := fmt.Sprintf("Fibocom FM350-GL @ %s", base)
 		if len(usbPaths) == 1 {
 			name = "Fibocom FM350-GL"
+		}
+		mode := detectDataMode(len(mbimIfaces), len(netIfaces))
+		switch mode {
+		case domain.DataModeRNDIS:
+			name += " [RNDIS]"
+		case domain.DataModeMBIM:
+			name += " [MBIM]"
+		case domain.DataModeATOnly:
+			name += " [AT-only]"
 		}
 		modems = append(modems, domain.ModemDevice{
 			ID:           "usb:" + sys,
@@ -226,8 +292,10 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 			SysPath:      sys,
 			Connected:    true,
 			PowerControl: pwr,
+			DataMode:     mode,
 			ATPorts:      atIfaces,
 			MBIMNodes:    mbimIfaces,
+			NetIfaces:    netIfaces,
 		})
 		_ = i
 	}

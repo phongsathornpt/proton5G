@@ -10,7 +10,11 @@ Type=simple
 User=root
 Group=root
 # Build: go build -o /usr/local/bin/fm350-manager ./cmd/app
+# Bind localhost by default (not 0.0.0.0). Optional API token:
+#   Environment=FM350_API_TOKEN=change-me
+#   or: ExecStart=… -token change-me
 ExecStart=/usr/local/bin/fm350-manager -bind 127.0.0.1 -port 8080 -history-file /var/lib/fm350-manager/history.json
+# EnvironmentFile=-/etc/fm350-manager.env
 Restart=on-failure
 RestartSec=3
 # Hardening (keep CAP for raw USB/sysfs if you drop root later)

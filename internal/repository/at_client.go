@@ -186,6 +186,12 @@ func (c *Client) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.
 	gtactResp, _ := c.SendRaw(CmdGTACTQ)
 
 	sig := MergeExtendedSignal(ParseCSQ(csqResp), cesqResp)
+	// Proprietary Fibocom cell info when CESQ leaves RSRP empty.
+	if sig.RSRP == 0 {
+		gtca, _ := c.SendRaw(CmdGTCAINFO)
+		gtcc, _ := c.SendRaw(CmdGTCCINFO)
+		sig = MergeExtendedSignal(sig, "", gtca, gtcc)
+	}
 	oper := ParseCOPS(copsResp)
 	reg5g := ParseRegistration(c5gResp)
 	regLTE := ParseRegistration(clteResp)
@@ -255,5 +261,42 @@ func (c *Client) SetRATMode(pref domain.RATModePref) error {
 	if !strings.Contains(resp, ATResultOK) {
 		return fmt.Errorf("%s failed: %s", cmd, resp)
 	}
+	return nil
+}
+
+// GetUSBMode queries AT+GTUSBMODE? (current USB composition profile).
+func (c *Client) GetUSBMode() (int, error) {
+	if err := c.EnsureConnected(); err != nil {
+		return 0, err
+	}
+	resp, err := c.SendRaw(CmdGTUSBMODEQ)
+	if err != nil {
+		return 0, err
+	}
+	mode := ParseGTUSBMODE(resp)
+	if mode == 0 && !strings.Contains(resp, ATResultOK) {
+		return 0, fmt.Errorf("GTUSBMODE query failed: %s", resp)
+	}
+	return mode, nil
+}
+
+// SetUSBMode issues AT+GTUSBMODE=<mode>. Modem typically re-enumerates USB.
+func (c *Client) SetUSBMode(mode int) error {
+	if mode <= 0 {
+		return fmt.Errorf("invalid USB mode %d", mode)
+	}
+	if err := c.EnsureConnected(); err != nil {
+		return err
+	}
+	cmd := CmdGTUSBMODESet(mode)
+	resp, err := c.SendRaw(cmd)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(resp, ATResultOK) {
+		return fmt.Errorf("%s failed: %s", cmd, resp)
+	}
+	// Port will disappear on re-enumeration.
+	_ = c.Close()
 	return nil
 }
