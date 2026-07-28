@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -403,5 +404,99 @@ func TestUSBModeQueryAndSet(t *testing.T) {
 	}
 	if len(info.Supported) < 2 {
 		t.Fatal("expected known modes")
+	}
+}
+
+func TestCachedStatusDoesNotCallAT(t *testing.T) {
+	at := &fakeAT{
+		port: "/dev/ttyUSB0",
+		sig:  domain.SignalInfo{RSSI: -70, Percentage: 50},
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:  at,
+	})
+	// Seed cache via Status
+	_ = svc.Status()
+	callsAfterPoll := at.calls
+	st := svc.CachedStatus()
+	if st.Signal.Percentage != 50 {
+		t.Fatalf("cache: %+v", st)
+	}
+	if at.calls != callsAfterPoll {
+		t.Fatalf("CachedStatus must not poll AT, calls %d -> %d", callsAfterPoll, at.calls)
+	}
+	if st.UpdatedAt.IsZero() {
+		t.Fatal("expected UpdatedAt set")
+	}
+}
+
+func TestRunStatusPollerUpdatesCache(t *testing.T) {
+	at := &fakeAT{
+		port: "/dev/ttyUSB0",
+		sig:  domain.SignalInfo{RSSI: -65, Percentage: 70},
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:  at,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		svc.RunStatusPoller(ctx, 20*time.Millisecond)
+		close(done)
+	}()
+
+	// Wait until at least one poll (immediate + maybe a tick)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if svc.CachedStatus().Signal.Percentage == 70 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if svc.CachedStatus().Signal.Percentage != 70 {
+		t.Fatalf("poller did not update cache: %+v", svc.CachedStatus())
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poller did not stop")
+	}
+}
+
+func TestConcurrentCachedStatusDuringPoll(t *testing.T) {
+	at := &fakeAT{
+		port: "/dev/ttyUSB0",
+		sig:  domain.SignalInfo{RSSI: -70, Percentage: 40},
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:  at,
+	})
+	_ = svc.Status()
+
+	errCh := make(chan error, 8)
+	for i := 0; i < 4; i++ {
+		go func() {
+			for j := 0; j < 50; j++ {
+				_ = svc.CachedStatus()
+			}
+			errCh <- nil
+		}()
+	}
+	go func() {
+		for j := 0; j < 20; j++ {
+			_ = svc.Status()
+		}
+		errCh <- nil
+	}()
+	for i := 0; i < 5; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

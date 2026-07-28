@@ -25,6 +25,7 @@ type ModemService struct {
 	product   string
 
 	mu              sync.RWMutex
+	pollMu          sync.Mutex // serializes full status polls (poller + Status())
 	status          domain.FullStatus
 	selectedModemID string
 	selectedMBIM    string
@@ -73,15 +74,52 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 	}
 }
 
-// Status refreshes USB + AT metrics, applies recovery policy, and samples history.
+// Status forces a USB+AT poll (recovery policy, history sample). Used by tests and ?fresh=1.
+// Prefer CachedStatus for hot paths (SSE) so many clients do not thrash the serial port.
 func (s *ModemService) Status() domain.FullStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.pollStatus()
+}
+
+// CachedStatus returns the last polled snapshot without performing AT I/O.
+func (s *ModemService) CachedStatus() domain.FullStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
+}
+
+// RunStatusPoller periodically refreshes the status cache until ctx is cancelled.
+// Single owner of recovery-driven AT polls; start once from main.
+func (s *ModemService) RunStatusPoller(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = appdefaults.StatusPollInterval
+	}
+	// Immediate sample so UI is not empty until first tick.
+	s.pollStatus()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pollStatus()
+		}
+	}
+}
+
+// pollStatus performs one full USB+AT sample. AT I/O runs outside s.mu; polls are
+// serialized with pollMu so recovery (rediscover/reset) is not concurrent.
+func (s *ModemService) pollStatus() domain.FullStatus {
+	s.pollMu.Lock()
+	defer s.pollMu.Unlock()
 
 	modemStat := s.usb.Check("")
-	s.status.Modem = modemStat
+	now := time.Now().UTC()
 
 	if !modemStat.Connected || s.at == nil {
+		s.mu.Lock()
+		s.status.Modem = modemStat
 		s.status.Signal = domain.SignalInfo{}
 		s.status.Network = domain.NetworkInfo{}
 		s.status.SIM = domain.SIMInfo{}
@@ -89,52 +127,86 @@ func (s *ModemService) Status() domain.FullStatus {
 		if !modemStat.Connected {
 			s.status.Error = "modem disconnected"
 		}
+		s.status.UpdatedAt = now
 		s.atFailStreak = 0
-		return s.status
+		st := s.status
+		s.mu.Unlock()
+		return st
 	}
 
-	modemStat.PortPath = s.at.PortName()
-	s.status.Modem = modemStat
+	portPath := ""
+	if s.at != nil {
+		portPath = s.at.PortName()
+	}
+	modemStat.PortPath = portPath
 
-	sig, net, sim, apn, rat, err := s.at.GetFullStatus()
+	// AT I/O without holding s.mu (at.Client serializes on its own mutex).
+	sig, netInfo, sim, apn, rat, err := s.at.GetFullStatus()
 	if err != nil {
-		return s.handleATFailureLocked(err)
+		return s.handleATFailure(modemStat, err)
 	}
 
-	return s.applyATSuccessLocked(sig, net, sim, apn, rat)
+	s.mu.Lock()
+	s.status.Modem = modemStat
+	st := s.applyATSuccessLocked(sig, netInfo, sim, apn, rat, now)
+	s.mu.Unlock()
+	return st
 }
 
-func (s *ModemService) handleATFailureLocked(err error) domain.FullStatus {
+// handleATFailure updates error state and may rediscover/reset. Called under pollMu only.
+func (s *ModemService) handleATFailure(modemStat domain.ModemStatus, err error) domain.FullStatus {
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	s.status.Modem = modemStat
+	if s.at != nil {
+		s.status.Modem.PortPath = s.at.PortName()
+	}
 	s.atFailStreak++
 	s.status.Error = formatDeviceError(err)
+	s.status.UpdatedAt = now
 
-	// Permission errors will not be fixed by rediscover or USBDEVFS_RESET.
 	if isPermissionError(err) {
 		s.logPermissionOnceLocked(err)
-		return s.status
+		st := s.status
+		s.mu.Unlock()
+		return st
 	}
 
-	// Rate-limited rediscover (serial exclusive; probing every 2s is noisy/useless).
-	if time.Since(s.lastRediscover) >= s.rediscoverEvery {
-		s.rediscoverATPortLocked()
+	doRediscover := time.Since(s.lastRediscover) >= s.rediscoverEvery
+	if doRediscover {
 		s.lastRediscover = time.Now()
-		sig, net, sim, apn, rat, retryErr := s.at.GetFullStatus()
+		// Close/switch port while holding mu briefly; Discover may open serial — unlock first.
+		s.mu.Unlock()
+		s.rediscoverATPort()
+		sig, netInfo, sim, apn, rat, retryErr := s.at.GetFullStatus()
+		s.mu.Lock()
 		if retryErr == nil {
-			return s.applyATSuccessLocked(sig, net, sim, apn, rat)
+			if s.at != nil {
+				s.status.Modem.PortPath = s.at.PortName()
+			}
+			st := s.applyATSuccessLocked(sig, netInfo, sim, apn, rat, time.Now().UTC())
+			s.mu.Unlock()
+			return st
 		}
 		s.status.Error = formatDeviceError(retryErr)
+		s.status.UpdatedAt = time.Now().UTC()
 		if isPermissionError(retryErr) {
 			s.logPermissionOnceLocked(retryErr)
-			return s.status
+			st := s.status
+			s.mu.Unlock()
+			return st
 		}
 		err = retryErr
 	}
 
 	s.maybeHardResetLocked(err)
-	return s.status
+	st := s.status
+	s.mu.Unlock()
+	return st
 }
 
-func (s *ModemService) applyATSuccessLocked(sig domain.SignalInfo, net domain.NetworkInfo, sim domain.SIMInfo, apn domain.APNConfig, rat domain.RATMode) domain.FullStatus {
+func (s *ModemService) applyATSuccessLocked(sig domain.SignalInfo, net domain.NetworkInfo, sim domain.SIMInfo, apn domain.APNConfig, rat domain.RATMode, now time.Time) domain.FullStatus {
 	s.atFailStreak = 0
 	s.status.Signal = sig
 	s.status.Network = net
@@ -142,13 +214,14 @@ func (s *ModemService) applyATSuccessLocked(sig domain.SignalInfo, net domain.Ne
 	s.status.APN = apn
 	s.status.RATMode = rat
 	s.status.Error = ""
+	s.status.UpdatedAt = now
 	if s.at != nil {
 		s.status.Modem.PortPath = s.at.PortName()
 	}
 
 	if s.history != nil && (sig.RSSI != 0 || sig.Percentage != 0 || sig.RSRP != 0) {
 		s.history.Add(domain.SignalSample{
-			Timestamp:  time.Now().UTC(),
+			Timestamp:  now,
 			RSSI:       sig.RSSI,
 			RSRP:       sig.RSRP,
 			RSRQ:       sig.RSRQ,
@@ -160,7 +233,7 @@ func (s *ModemService) applyATSuccessLocked(sig domain.SignalInfo, net domain.Ne
 }
 
 func (s *ModemService) logPermissionOnceLocked(err error) {
-	// Avoid flooding logs every SSE tick.
+	// Avoid flooding logs every poll tick.
 	if time.Since(s.lastPermLogAt) < s.rediscoverEvery {
 		return
 	}
@@ -170,12 +243,6 @@ func (s *ModemService) logPermissionOnceLocked(err error) {
 		port = s.at.PortName()
 	}
 	log.Printf("[WARN] AT access denied on %s: %v — need root or membership in group 'dialout' (then re-login)", port, err)
-}
-
-func (s *ModemService) CachedStatus() domain.FullStatus {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.status
 }
 
 func (s *ModemService) History() []domain.SignalSample {
@@ -638,11 +705,7 @@ func (s *ModemService) SetUSBMode(mode int) (domain.USBModeInfo, error) {
 	s.mu.Lock()
 	s.lastRediscover = time.Time{} // allow immediate rediscover on next failure
 	s.mu.Unlock()
-	if s.discover != nil {
-		s.mu.Lock()
-		s.rediscoverATPortLocked()
-		s.mu.Unlock()
-	}
+	s.rediscoverATPort()
 	info := s.USBMode()
 	if info.Mode == 0 {
 		// Query may fail mid-reenumerate; report requested mode.
@@ -673,7 +736,9 @@ func (s *ModemService) RunWatchdog(ctx context.Context, interval time.Duration) 
 	}
 }
 
-func (s *ModemService) rediscoverATPortLocked() {
+// rediscoverATPort closes the current AT port and probes for a working one.
+// Must not be called while holding s.mu if Discover can block on serial I/O.
+func (s *ModemService) rediscoverATPort() {
 	if s.at == nil || s.discover == nil {
 		return
 	}

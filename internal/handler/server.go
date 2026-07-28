@@ -1,11 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"fm350-monitor/internal/pkg/appdefaults"
 	"fm350-monitor/internal/pkg/domain"
@@ -15,7 +15,8 @@ import (
 
 // ModemUsecase is the application surface required by HTTP handlers.
 type ModemUsecase interface {
-	Status() domain.FullStatus
+	Status() domain.FullStatus       // force AT/USB poll
+	CachedStatus() domain.FullStatus // last poll snapshot (SSE hot path)
 	History() []domain.SignalSample
 	ListModems() domain.ModemInventory
 	SelectModem(req domain.ModemSelectRequest) (domain.ModemInventory, error)
@@ -36,12 +37,23 @@ type ModemUsecase interface {
 type Server struct {
 	svc   ModemUsecase
 	token string // optional shared API token; empty = open access
+	hub   *SSEHub
 }
 
 // NewServer builds the HTTP adapter. token protects all routes when non-empty
 // (Authorization Bearer, X-API-Token, or ?token= for SSE).
+// Call Run(ctx) once from main so the SSE hub ticks.
 func NewServer(svc ModemUsecase, token string) *Server {
-	return &Server{svc: svc, token: strings.TrimSpace(token)}
+	s := &Server{svc: svc, token: strings.TrimSpace(token)}
+	s.hub = NewSSEHub(svc.CachedStatus, appdefaults.SSEInterval)
+	return s
+}
+
+// Run starts the SSE broadcast hub until ctx is cancelled. Start once from main.
+func (s *Server) Run(ctx context.Context) {
+	if s.hub != nil {
+		s.hub.Run(ctx)
+	}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -97,7 +109,12 @@ func (s *Server) handleSelectModem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.svc.Status())
+	// Default: cached snapshot from background poller. ?fresh=1 forces AT/USB poll.
+	if r.URL.Query().Get("fresh") == "1" || strings.EqualFold(r.URL.Query().Get("fresh"), "true") {
+		_ = json.NewEncoder(w).Encode(s.svc.Status())
+		return
+	}
+	_ = json.NewEncoder(w).Encode(s.svc.CachedStatus())
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -116,24 +133,45 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if bytes, err := json.Marshal(s.svc.Status()); err == nil {
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", bytes)
+	// Fan-out from shared hub (marshal once). Cache only — poller owns AT I/O.
+	ch, unsub := s.hub.Subscribe()
+	defer unsub()
+
+	writeFrame := func(payload []byte) bool {
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
 		flusher.Flush()
+		return true
 	}
 
-	ticker := time.NewTicker(appdefaults.SSEInterval)
-	defer ticker.Stop()
+	// First frame: hub last snapshot if present, else marshal cache now.
+	select {
+	case payload, ok := <-ch:
+		if !ok {
+			return
+		}
+		if !writeFrame(payload) {
+			return
+		}
+	default:
+		if raw, err := json.Marshal(s.svc.CachedStatus()); err == nil {
+			if !writeFrame(raw) {
+				return
+			}
+		}
+	}
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
-			current := s.svc.Status()
-			bytes, err := json.Marshal(current)
-			if err == nil {
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", bytes)
-				flusher.Flush()
+		case payload, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !writeFrame(payload) {
+				return
 			}
 		}
 	}

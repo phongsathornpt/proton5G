@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ func main() {
 	bind := flag.String("bind", appdefaults.HTTPBind, "HTTP bind address (default localhost for safety)")
 	serialPort := flag.String("serial", "", "Override AT serial port (e.g. /dev/ttyUSB0)")
 	watchInterval := flag.Duration("watch", appdefaults.WatchInterval, "USB watchdog poll interval")
+	pollInterval := flag.Duration("poll", appdefaults.StatusPollInterval, "Background status (AT/USB) poll interval")
 	historySize := flag.Int("history", appdefaults.HistoryCap, "In-memory signal history capacity")
 	historyFile := flag.String("history-file", "", "Optional JSON file to load/save signal history")
 	historySaveEvery := flag.Duration("history-save", appdefaults.HistorySave, "How often to persist history when -history-file is set")
@@ -102,34 +104,50 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go svc.RunWatchdog(ctx, *watchInterval)
+	var bg sync.WaitGroup
+	startBG := func(name string, fn func()) {
+		bg.Add(1)
+		go func() {
+			defer bg.Done()
+			fn()
+			log.Printf("[INFO] background %s stopped", name)
+		}()
+	}
+
+	startBG("watchdog", func() { svc.RunWatchdog(ctx, *watchInterval) })
+	startBG("status-poller", func() {
+		log.Printf("[INFO] Status poller interval %s", *pollInterval)
+		svc.RunStatusPoller(ctx, *pollInterval)
+	})
 
 	if *historyFile != "" {
-		go func() {
-			ticker := time.NewTicker(*historySaveEvery)
+		path := *historyFile
+		every := *historySaveEvery
+		startBG("history-save", func() {
+			ticker := time.NewTicker(every)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if err := hist.SaveFile(*historyFile); err != nil {
+					if err := hist.SaveFile(path); err != nil {
 						log.Printf("[WARN] Save history: %v", err)
 					}
 				}
 			}
-		}()
+		})
 	}
 
-	go func() { svc.Status() }()
-
 	httpHandler := handler.NewServer(svc, token)
+	startBG("sse-hub", func() { httpHandler.Run(ctx) })
+
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
 	httpServer := &http.Server{
 		Addr:         addr,
 		Handler:      httpHandler.Routes(),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 0,
+		WriteTimeout: 0, // SSE long-lived
 	}
 
 	go func() {
@@ -149,6 +167,19 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+
+	// Wait for background workers (poller, watchdog, history) up to remaining budget.
+	done := make(chan struct{})
+	go func() {
+		bg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Println("[WARN] background workers did not stop within 5s")
+	}
+
 	if *historyFile != "" {
 		if err := hist.SaveFile(*historyFile); err != nil {
 			log.Printf("[WARN] Final history save: %v", err)

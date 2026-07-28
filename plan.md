@@ -44,6 +44,18 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] Optional API token (`-token` / `FM350_API_TOKEN`)
 - [x] Systemd unit binds `127.0.0.1` by default; optional `EnvironmentFile` for token
 
+## Concurrency (goroutines)
+- [x] Background `RunStatusPoller` owns AT status + recovery; cache for SSE
+- [x] Short `ModemService.mu` critical sections (no lock across AT I/O)
+- [x] `pollMu` serializes concurrent `Status()` / poller
+- [x] SSE + default `GET /api/status` use `CachedStatus`; `?fresh=1` forces poll
+- [x] `main`: WaitGroup for watchdog / poller / history; clean shutdown
+- [x] Flag `-poll` (default 2s)
+- [x] Parallel AT inventory probes (`ProbeATPortsCached`, ListModems)
+- [x] Parallel DiscoverATPort (same helper; list-order preference preserved)
+- [x] Optional SSE broadcast hub (`SSEHub`: one marshal + fan-out; `Server.Run` from main)
+- [ ] Optional AT work queue for control cmds (only if contention shows up)
+
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)
 - [ ] **True MBIM composition**: only if a firmware mode document lists a non-RNDIS profile for this SKU

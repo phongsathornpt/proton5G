@@ -99,6 +99,8 @@ func ProbeATPort(name string) bool {
 }
 
 // DiscoverATPort finds a working AT command port for the FM350-GL.
+// Candidates are probed in parallel (bounded); the first ready path in list order wins
+// (USB VID/PID matches stay preferred over generic ttyUSB*).
 func DiscoverATPort(vendor, product string) (string, error) {
 	candidates, err := ListCandidatePorts(vendor, product)
 	if err != nil {
@@ -108,19 +110,24 @@ func DiscoverATPort(vendor, product string) (string, error) {
 		return "", nil
 	}
 
+	ready := ProbeATPortsCached(candidates, "")
 	for _, name := range candidates {
-		if ProbeATPort(name) {
+		if ready[name] {
 			return name, nil
 		}
 	}
 
+	// No port answered AT — return first candidate for later retry by status poller.
 	return candidates[0], nil
 }
 
 // DiscoverATPortPrefer keeps preferred if it still answers AT; otherwise rediscovers.
 func DiscoverATPortPrefer(vendor, product, preferred string) (string, error) {
-	if preferred != "" && ProbeATPort(preferred) {
-		return preferred, nil
+	if preferred != "" {
+		// Single-path check (uses cache when warm).
+		if ProbeATPortCached(preferred, "") {
+			return preferred, nil
+		}
 	}
 	return DiscoverATPort(vendor, product)
 }

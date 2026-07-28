@@ -17,6 +17,8 @@ var (
 	probeMu    sync.Mutex
 	probeCache = map[string]probeEntry{}
 	probeTTL   = 15 * time.Second
+	// Bound concurrent AT probes (each open is independent tty; avoid hammering USB).
+	probeParallelism = 6
 )
 
 type probeEntry struct {
@@ -184,23 +186,76 @@ func ProbeATPortCached(path, skipPath string) bool {
 	if path == "" {
 		return false
 	}
-	if skipPath != "" && path == skipPath {
-		return true
+	m := ProbeATPortsCached([]string{path}, skipPath)
+	return m[path]
+}
+
+// ProbeATPortsCached probes many serial paths concurrently (bounded), using the
+// same TTL cache as ProbeATPortCached. Distinct tty nodes open independently;
+// skipPath (manager's open AT port) is never opened (assumed ready).
+func ProbeATPortsCached(paths []string, skipPath string) map[string]bool {
+	out := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return out
 	}
+
+	now := time.Now()
+	var need []string
+	seen := make(map[string]struct{}, len(paths))
+
 	probeMu.Lock()
-	if e, ok := probeCache[path]; ok && time.Now().Before(e.expiresAt) {
-		okv := e.ok
-		probeMu.Unlock()
-		return okv
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, dup := seen[path]; dup {
+			continue
+		}
+		seen[path] = struct{}{}
+		if skipPath != "" && path == skipPath {
+			out[path] = true
+			continue
+		}
+		if e, ok := probeCache[path]; ok && now.Before(e.expiresAt) {
+			out[path] = e.ok
+			continue
+		}
+		need = append(need, path)
 	}
 	probeMu.Unlock()
 
-	ok := ProbeATPort(path)
+	if len(need) == 0 {
+		return out
+	}
 
-	probeMu.Lock()
-	probeCache[path] = probeEntry{ok: ok, expiresAt: time.Now().Add(probeTTL)}
-	probeMu.Unlock()
-	return ok
+	type result struct {
+		path string
+		ok   bool
+	}
+	resCh := make(chan result, len(need))
+	sem := make(chan struct{}, probeParallelism)
+	var wg sync.WaitGroup
+	for _, path := range need {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ok := ProbeATPort(p)
+			probeMu.Lock()
+			probeCache[p] = probeEntry{ok: ok, expiresAt: time.Now().Add(probeTTL)}
+			probeMu.Unlock()
+			resCh <- result{path: p, ok: ok}
+		}(path)
+	}
+	go func() {
+		wg.Wait()
+		close(resCh)
+	}()
+	for r := range resCh {
+		out[r.path] = r.ok
+	}
+	return out
 }
 
 // ListModems builds logical modem entries for UI selection.
@@ -218,9 +273,18 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 	assignedMBIM := map[string]struct{}{}
 	assignedTTY := map[string]struct{}{}
 
-	var modems []domain.ModemDevice
+	// Pass 1: cheap sysfs discovery; collect all tty paths for one parallel AT probe.
+	type usbDraft struct {
+		sys        string
+		pwr        domain.PowerControl
+		ttys       []string
+		mbimIfaces []domain.ModemInterface
+		netIfaces  []domain.ModemInterface
+	}
+	drafts := make([]usbDraft, 0, len(usbPaths))
+	var allTTY []string
 
-	for i, sys := range usbPaths {
+	for _, sys := range usbPaths {
 		pwr := domain.PowerUnknown
 		if b, err := os.ReadFile(filepath.Join(sys, "power", "control")); err == nil {
 			pwr = domain.NormalizePowerControl(string(b))
@@ -229,20 +293,9 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 		mbims := mbimNodesUnder(sys)
 		nets := netIfacesUnder(sys)
 
-		var atIfaces []domain.ModemInterface
 		for _, t := range ttys {
 			assignedTTY[t] = struct{}{}
-			ready := ProbeATPortCached(t, openATPort)
-			label := t
-			if ready {
-				label = t + " (AT OK)"
-			}
-			atIfaces = append(atIfaces, domain.ModemInterface{
-				Path:    t,
-				Kind:    domain.IfaceKindAT,
-				ATReady: ready,
-				Label:   label,
-			})
+			allTTY = append(allTTY, t)
 		}
 
 		var mbimIfaces []domain.ModemInterface
@@ -255,27 +308,63 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 			})
 		}
 
-		var netIfaces []domain.ModemInterface
-		for _, n := range nets {
-			st := netIfaceState(n)
-			label := fmt.Sprintf("%s (RNDIS/net, %s)", n, st)
-			if addrs := NetIfaceAddrs(n); len(addrs) > 0 {
-				label = fmt.Sprintf("%s (RNDIS/net, %s, %s)", n, st, strings.Join(addrs, ", "))
+		// Net state/addrs are process-bound but cheap; parallelize if many ifaces.
+		netIfaces := buildNetIfacesParallel(nets)
+
+		drafts = append(drafts, usbDraft{
+			sys:        sys,
+			pwr:        pwr,
+			ttys:       ttys,
+			mbimIfaces: mbimIfaces,
+			netIfaces:  netIfaces,
+		})
+	}
+
+	// Serial-only fallbacks not under matched USB device.
+	type serialDraft struct {
+		path string
+	}
+	var serials []serialDraft
+	candidates, _ := ListCandidatePorts(vendor, product)
+	for _, c := range candidates {
+		if _, ok := assignedTTY[c]; ok {
+			continue
+		}
+		if st, err := os.Stat(c); err != nil || st.IsDir() {
+			continue
+		}
+		serials = append(serials, serialDraft{path: c})
+		allTTY = append(allTTY, c)
+		assignedTTY[c] = struct{}{}
+	}
+
+	// One bounded-parallel probe for every candidate port.
+	readyMap := ProbeATPortsCached(allTTY, openATPort)
+
+	// Pass 2: assemble modem list with ATReady labels.
+	var modems []domain.ModemDevice
+	for _, d := range drafts {
+		var atIfaces []domain.ModemInterface
+		for _, t := range d.ttys {
+			ready := readyMap[t]
+			label := t
+			if ready {
+				label = t + " (AT OK)"
 			}
-			netIfaces = append(netIfaces, domain.ModemInterface{
-				Path:  n,
-				Kind:  domain.IfaceKindNet,
-				Label: label,
-				State: st,
+			atIfaces = append(atIfaces, domain.ModemInterface{
+				Path:    t,
+				Kind:    domain.IfaceKindAT,
+				ATReady: ready,
+				Label:   label,
 			})
 		}
 
-		base := filepath.Base(sys)
+		base := filepath.Base(d.sys)
 		name := fmt.Sprintf("Fibocom FM350-GL @ %s", base)
 		if len(usbPaths) == 1 {
 			name = "Fibocom FM350-GL"
 		}
-		mode := detectDataMode(len(mbimIfaces), len(netIfaces))
+		mode := detectDataMode(len(d.mbimIfaces), len(d.netIfaces))
 		switch mode {
 		case domain.DataModeRNDIS:
 			name += " [RNDIS]"
@@ -285,19 +374,18 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 			name += " [AT-only]"
 		}
 		modems = append(modems, domain.ModemDevice{
-			ID:           "usb:" + sys,
+			ID:           "usb:" + d.sys,
 			Name:         name,
 			VendorID:     vendor,
 			ProductID:    product,
-			SysPath:      sys,
+			SysPath:      d.sys,
 			Connected:    true,
-			PowerControl: pwr,
+			PowerControl: d.pwr,
 			DataMode:     mode,
 			ATPorts:      atIfaces,
-			MBIMNodes:    mbimIfaces,
-			NetIfaces:    netIfaces,
+			MBIMNodes:    d.mbimIfaces,
+			NetIfaces:    d.netIfaces,
 		})
-		_ = i
 	}
 
 	// Attach unassigned global MBIM nodes to the first USB modem if only one; else unassociated.
@@ -331,30 +419,20 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 		}
 	}
 
-	// Serial-only fallbacks for ttyUSB not under a matched USB device.
-	candidates, _ := ListCandidatePorts(vendor, product)
-	for _, c := range candidates {
-		if _, ok := assignedTTY[c]; ok {
-			continue
-		}
-		// Only add if device node exists
-		if st, err := os.Stat(c); err != nil || st.IsDir() {
-			continue
-		}
-		ready := ProbeATPortCached(c, openATPort)
-		label := c
+	for _, s := range serials {
+		ready := readyMap[s.path]
+		label := s.path
 		if ready {
-			label = c + " (AT OK)"
+			label = s.path + " (AT OK)"
 		}
 		modems = append(modems, domain.ModemDevice{
-			ID:        "serial:" + c,
-			Name:      "Serial " + c,
+			ID:        "serial:" + s.path,
+			Name:      "Serial " + s.path,
 			Connected: true,
 			ATPorts: []domain.ModemInterface{{
-				Path: c, Kind: domain.IfaceKindAT, ATReady: ready, Label: label,
+				Path: s.path, Kind: domain.IfaceKindAT, ATReady: ready, Label: label,
 			}},
 		})
-		assignedTTY[c] = struct{}{}
 	}
 
 	// Ensure currently open AT port appears even if discovery missed it.
@@ -374,6 +452,39 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 	}
 
 	return modems
+}
+
+// buildNetIfacesParallel fills RNDIS/net iface metadata; parallel when several ifaces.
+func buildNetIfacesParallel(nets []string) []domain.ModemInterface {
+	if len(nets) == 0 {
+		return nil
+	}
+	out := make([]domain.ModemInterface, len(nets))
+	if len(nets) == 1 {
+		n := nets[0]
+		st := netIfaceState(n)
+		label := fmt.Sprintf("%s (RNDIS/net, %s)", n, st)
+		if addrs := NetIfaceAddrs(n); len(addrs) > 0 {
+			label = fmt.Sprintf("%s (RNDIS/net, %s, %s)", n, st, strings.Join(addrs, ", "))
+		}
+		out[0] = domain.ModemInterface{Path: n, Kind: domain.IfaceKindNet, Label: label, State: st}
+		return out
+	}
+	var wg sync.WaitGroup
+	for i, n := range nets {
+		wg.Add(1)
+		go func(i int, n string) {
+			defer wg.Done()
+			st := netIfaceState(n)
+			label := fmt.Sprintf("%s (RNDIS/net, %s)", n, st)
+			if addrs := NetIfaceAddrs(n); len(addrs) > 0 {
+				label = fmt.Sprintf("%s (RNDIS/net, %s, %s)", n, st, strings.Join(addrs, ", "))
+			}
+			out[i] = domain.ModemInterface{Path: n, Kind: domain.IfaceKindNet, Label: label, State: st}
+		}(i, n)
+	}
+	wg.Wait()
+	return out
 }
 
 // FindModem returns modem by id from a list.

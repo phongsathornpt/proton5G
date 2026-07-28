@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"fm350-monitor/internal/pkg/domain"
 )
@@ -23,7 +25,8 @@ type stubService struct {
 	dataDiscErr    error
 }
 
-func (s *stubService) Status() domain.FullStatus { return s.status }
+func (s *stubService) Status() domain.FullStatus       { return s.status }
+func (s *stubService) CachedStatus() domain.FullStatus { return s.status }
 func (s *stubService) History() []domain.SignalSample {
 	return []domain.SignalSample{}
 }
@@ -86,6 +89,24 @@ func TestGetStatusEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if body.RATMode != domain.RATModeAuto {
+		t.Fatalf("got %+v", body)
+	}
+}
+
+func TestGetStatusFreshQuery(t *testing.T) {
+	// fresh=1 still returns OK with stub Status()
+	srv := NewServer(&stubService{status: domain.FullStatus{RATMode: domain.RATMode5GOnly}}, "")
+	req := httptest.NewRequest("GET", "/api/status?fresh=1", nil)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body domain.FullStatus
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RATMode != domain.RATMode5GOnly {
 		t.Fatalf("got %+v", body)
 	}
 }
@@ -260,6 +281,114 @@ func TestAuthQueryTokenSSE(t *testing.T) {
 	srv.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestSSEEventsStream(t *testing.T) {
+	stub := &stubService{status: domain.FullStatus{RATMode: domain.RATMode5GOnly, Signal: domain.SignalInfo{Percentage: 80}}}
+	srv := NewServer(stub, "")
+
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go srv.Run(hubCtx)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequestWithContext(ctx, "GET", "/api/events", nil)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		srv.Routes().ServeHTTP(w, req)
+		close(done)
+	}()
+
+	// Wait until first SSE frame is written.
+	deadline := time.Now().Add(2 * time.Second)
+	var body string
+	for time.Now().Before(deadline) {
+		body = w.Body.String()
+		if strings.Contains(body, "data: ") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler did not exit after cancel")
+	}
+
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type: %q", ct)
+	}
+	if !strings.Contains(body, "data: ") {
+		t.Fatalf("expected data frame, body=%q", body)
+	}
+	// Parse first data line JSON.
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var st domain.FullStatus
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &st); err != nil {
+			t.Fatalf("json: %v body line %q", err, line)
+		}
+		if st.RATMode != domain.RATMode5GOnly || st.Signal.Percentage != 80 {
+			t.Fatalf("unexpected status: %+v", st)
+		}
+		return
+	}
+	t.Fatal("no data line found")
+}
+
+func TestSSEEventsAuth(t *testing.T) {
+	srv := NewServer(&stubService{status: domain.FullStatus{RATMode: domain.RATModeAuto}}, "secret")
+
+	// Missing token → 401
+	req := httptest.NewRequest("GET", "/api/events", nil)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", w.Code)
+	}
+
+	// Query token → stream starts (200 + event-stream)
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go srv.Run(hubCtx)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req = httptest.NewRequestWithContext(ctx, "GET", "/api/events?token=secret", nil)
+	w = httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		srv.Routes().ServeHTTP(w, req)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(w.Body.String(), "data: ") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler did not exit")
+	}
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with token, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type: %q", ct)
+	}
+	if !strings.Contains(w.Body.String(), "data: ") {
+		t.Fatalf("expected SSE data, body=%q", w.Body.String())
 	}
 }
 

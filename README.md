@@ -146,6 +146,7 @@ Open **http://127.0.0.1:8080**
 | `-port` | `8080` | HTTP port |
 | `-serial` | auto | Force AT port e.g. `/dev/ttyUSB2` |
 | `-watch` | `5s` | USB power poll interval |
+| `-poll` | `2s` | Background status (AT/USB) poll interval |
 | `-history` | `180` | Signal sample ring capacity |
 | `-history-file` | _(empty)_ | Persist history JSON |
 | `-no-elevate` | false | Do not re-exec with sudo |
@@ -219,8 +220,8 @@ Details: [`docs/architecture.md`](docs/architecture.md), [`docs/at-command-guide
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/status` | Full modem status JSON |
-| GET | `/api/events` | SSE status stream (~2s) |
+| GET | `/api/status` | Cached status JSON (`?fresh=1` forces AT poll) |
+| GET | `/api/events` | SSE stream of **cache** (shared hub, ~2s; poller owns AT) |
 | GET | `/api/modems` | Inventory + selection |
 | POST | `/api/modems/select` | Choose modem / AT / data iface |
 | POST | `/api/apn` | Set APN |

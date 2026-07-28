@@ -60,3 +60,40 @@ func TestFindModem(t *testing.T) {
 		t.Fatal("expected miss")
 	}
 }
+
+func TestProbeATPortsCachedSkipAndEmpty(t *testing.T) {
+	m := ProbeATPortsCached(nil, "")
+	if len(m) != 0 {
+		t.Fatalf("empty: %v", m)
+	}
+	// Active port is never opened — always reported ready.
+	m = ProbeATPortsCached([]string{"/dev/ttyUSB_does_not_exist_xyz", "/dev/ttyUSB_active"}, "/dev/ttyUSB_active")
+	if !m["/dev/ttyUSB_active"] {
+		t.Fatal("skip path should be ready")
+	}
+	// Nonexistent path should fail probe (and be cached).
+	if m["/dev/ttyUSB_does_not_exist_xyz"] {
+		t.Fatal("missing device should not be AT-ready")
+	}
+	// Second call should hit cache (still false).
+	m2 := ProbeATPortsCached([]string{"/dev/ttyUSB_does_not_exist_xyz"}, "")
+	if m2["/dev/ttyUSB_does_not_exist_xyz"] {
+		t.Fatal("cached miss expected")
+	}
+}
+
+func TestProbeATPortsCachedParallelDistinct(t *testing.T) {
+	// Several missing paths probed concurrently — all false, no hang/panic.
+	paths := []string{
+		"/dev/ttyUSB_probe_a_zzz",
+		"/dev/ttyUSB_probe_b_zzz",
+		"/dev/ttyUSB_probe_c_zzz",
+		"/dev/ttyUSB_probe_d_zzz",
+	}
+	m := ProbeATPortsCached(paths, "")
+	for _, p := range paths {
+		if m[p] {
+			t.Fatalf("%s unexpectedly ready", p)
+		}
+	}
+}

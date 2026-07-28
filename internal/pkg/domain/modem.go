@@ -55,11 +55,12 @@ type SignalSample struct {
 
 // FullStatus aggregates all modem metrics for WebUI and SSE.
 type FullStatus struct {
-	Modem   ModemStatus `json:"modem"`
-	Signal  SignalInfo  `json:"signal"`
-	Network NetworkInfo `json:"network"`
-	SIM     SIMInfo     `json:"sim"`
-	APN     APNConfig   `json:"apn"`
-	RATMode RATMode     `json:"rat_mode"`
-	Error   string      `json:"error,omitempty"`
+	Modem     ModemStatus `json:"modem"`
+	Signal    SignalInfo  `json:"signal"`
+	Network   NetworkInfo `json:"network"`
+	SIM       SIMInfo     `json:"sim"`
+	APN       APNConfig   `json:"apn"`
+	RATMode   RATMode     `json:"rat_mode"`
+	Error     string      `json:"error,omitempty"`
+	UpdatedAt time.Time   `json:"updated_at,omitempty"` // last successful poll (or last error update)
 }

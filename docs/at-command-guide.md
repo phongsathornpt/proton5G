@@ -44,7 +44,7 @@ Or via the WebUI **USB Hard Reset** button / `POST /api/reset` (requires privile
 
 ### Multi-interface serial
 
-FM350 often exposes several `/dev/ttyUSB*`. The manager probes each candidate with `AT` and uses the first that returns `OK`. Override with `-serial /dev/ttyUSBN` if needed.
+FM350 often exposes several `/dev/ttyUSB*`. The manager probes candidates with `AT` **in parallel** (bounded; 15s cache) and prefers USB VID/PID matches, then the first port that returns `OK`. The inventory UI labels ports `(AT OK)`. Override with `-serial /dev/ttyUSBN` if needed. The open monitoring port is never re-probed while held.
 
 ## Extended / proprietary signal
 
