@@ -1,0 +1,25 @@
+[Unit]
+Description=FM350-GL USB Modem Manager & Watchdog
+Documentation=file:///usr/local/share/doc/fm350-monitor/architecture.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Sysfs autosuspend/power/control and USBDEVFS_RESET need elevated privileges.
+User=root
+Group=root
+# Build: go build -o /usr/local/bin/fm350-manager ./cmd/app
+ExecStart=/usr/local/bin/fm350-manager -bind 127.0.0.1 -port 8080 -history-file /var/lib/fm350-manager/history.json
+Restart=on-failure
+RestartSec=3
+# Hardening (keep CAP for raw USB/sysfs if you drop root later)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/sys/module/usbcore/parameters /sys/bus/usb/devices /dev/bus/usb /var/lib/fm350-manager
+StateDirectory=fm350-manager
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

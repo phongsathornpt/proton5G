@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FM350-GL Modem Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="logo">
+            <h1>Fibocom FM350-GL</h1>
+            <span class="badge">USB Manager</span>
+        </div>
+        <div class="status-indicator">
+            <span id="conn-dot" class="dot disconnected"></span>
+            <span id="conn-status">Disconnected</span>
+        </div>
+    </header>
+
+    <main class="grid">
+        <!-- Modem selection -->
+        <section class="card full-width">
+            <h2>Modem</h2>
+            <div class="form-row">
+                <div class="form-group grow">
+                    <label for="modem-select">Device</label>
+                    <select id="modem-select"></select>
+                </div>
+                <div class="form-group grow">
+                    <label for="at-port-select">AT port</label>
+                    <select id="at-port-select"></select>
+                </div>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" onclick="applyModemSelection()">Use selected</button>
+                <button type="button" onclick="refreshModems()">Refresh list</button>
+            </div>
+            <p class="hint" id="modem-hint">Select a modem and AT port, then Use selected to connect monitoring.</p>
+        </section>
+
+        <!-- Signal & Network -->
+        <section class="card">
+            <h2>Signal & Network</h2>
+            <div class="signal-meter">
+                <div class="bar-container">
+                    <div id="signal-fill" class="fill" style="width: 0%;"></div>
+                </div>
+                <span id="signal-pct" class="pct">0%</span>
+            </div>
+            <div class="info-list">
+                <div class="info-item"><span>Operator:</span> <strong id="net-operator">-</strong></div>
+                <div class="info-item"><span>Technology:</span> <strong id="net-tech">-</strong></div>
+                <div class="info-item"><span>Registration:</span> <strong id="net-reg">-</strong></div>
+                <div class="info-item"><span>RSSI:</span> <strong id="sig-rssi">-</strong></div>
+                <div class="info-item"><span>RSRP:</span> <strong id="sig-rsrp">-</strong></div>
+                <div class="info-item"><span>RSRQ:</span> <strong id="sig-rsrq">-</strong></div>
+                <div class="info-item"><span>Serial:</span> <strong id="modem-port">-</strong></div>
+                <div class="info-item"><span>Power:</span> <strong id="modem-power">-</strong></div>
+            </div>
+            <p id="status-error" class="error-line"></p>
+        </section>
+
+        <!-- SIM Card -->
+        <section class="card">
+            <h2>SIM Card</h2>
+            <div class="info-list">
+                <div class="info-item"><span>Status:</span> <strong id="sim-state">-</strong></div>
+                <div class="info-item"><span>IMSI:</span> <strong id="sim-imsi">-</strong></div>
+                <div class="info-item"><span>ICCID:</span> <strong id="sim-iccid">-</strong></div>
+                <div class="info-item"><span>Preferred Mode:</span> <strong id="rat-mode">-</strong></div>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" onclick="setRAT('5g')">Force 5G</button>
+                <button type="button" onclick="setRAT('lte')">Force LTE</button>
+                <button type="button" onclick="setRAT('auto')">Auto Mode</button>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-danger" onclick="usbReset()">USB Hard Reset</button>
+            </div>
+        </section>
+
+        <!-- APN Config -->
+        <section class="card">
+            <h2>APN Settings</h2>
+            <form id="apn-form" onsubmit="updateAPN(event)">
+                <div class="form-group">
+                    <label>PDP Type</label>
+                    <select id="apn-type">
+                        <option value="IPV4V6">IPV4V6</option>
+                        <option value="IP">IP (IPv4)</option>
+                        <option value="IPV6">IPv6</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>APN Name</label>
+                    <input type="text" id="apn-name" placeholder="e.g. internet" required>
+                </div>
+                <button type="submit" class="btn-primary">Apply APN</button>
+            </form>
+        </section>
+
+        <!-- MBIM Bearer -->
+        <section class="card">
+            <h2>MBIM Bearer</h2>
+            <div class="info-list">
+                <div class="info-item"><span>mbimcli:</span> <strong id="mbim-cli">-</strong></div>
+            </div>
+            <div class="form-group mt-15">
+                <label for="mbim-select">MBIM device</label>
+                <select id="mbim-select"></select>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" id="mbim-connect-btn" onclick="mbimConnect()">Connect</button>
+                <button type="button" onclick="mbimDisconnect()">Disconnect</button>
+                <button type="button" onclick="refreshMBIM()">Refresh</button>
+            </div>
+            <p class="hint" id="mbim-hint">Optional: requires <code>mbimcli</code> (libmbim-utils) and a <code>/dev/cdc-wdm*</code> node.</p>
+        </section>
+
+        <!-- Signal history -->
+        <section class="card full-width">
+            <h2>Signal History</h2>
+            <canvas id="signal-chart" width="900" height="140" aria-label="RSSI history chart"></canvas>
+            <p class="hint">In-memory ring buffer (newest samples on the right). Refreshed with status polls.</p>
+        </section>
+
+        <!-- AT Console -->
+        <section class="card full-width">
+            <h2>Raw AT Terminal</h2>
+            <div id="console-output" class="console">Ready...</div>
+            <form onsubmit="sendRawAT(event)" class="console-input-row">
+                <input type="text" id="at-input" placeholder="e.g. AT+CSQ" required>
+                <button type="submit">Send</button>
+            </form>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
