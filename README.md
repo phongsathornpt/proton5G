@@ -31,6 +31,45 @@ It keeps USB power stable (autosuspend / `power/control`), talks **AT** over ser
 
 ## Required libraries & dependencies
 
+### Summary — OS packages (Debian/Ubuntu)
+
+| Feature | Packages (binaries) | Required? |
+|---------|---------------------|-----------|
+| **Core daemon** (AT, WebUI, USB power) | Linux kernel + root/sudo | **Yes** |
+| **WAN / RNDIS data** | `iproute2` (`ip`), `isc-dhcp-client` (`dhclient`) *or* `dhcpcd` | For data connect |
+| **WAN / MBIM data** | `libmbim-utils` (`mbimcli`) | Only if `/dev/cdc-wdm*` |
+| **LAN / WiFi hotspot** | `hostapd`, `dnsmasq`, `iw`, `nftables` *or* `iptables`, `wireless-regdb` | For software AP + NAT |
+| **Build** | `golang-go`, `git` | Build only |
+| **Debug** | `usbutils` (`lsusb`), `rfkill` | Optional |
+
+**One-shot install (full cellular router path):**
+
+```bash
+# Build
+sudo apt-get install -y golang-go git
+
+# Core runtime (WAN RNDIS + system tools)
+sudo apt-get install -y iproute2 isc-dhcp-client sudo
+
+# WiFi hotspot (LAN AP + DHCP + NAT)
+sudo apt-get install -y hostapd dnsmasq iw nftables wireless-regdb
+
+# Optional: MBIM compositions only
+# sudo apt-get install -y libmbim-utils
+
+# Optional debug
+# sudo apt-get install -y usbutils
+```
+
+Verify:
+
+```bash
+command -v ip dhclient hostapd dnsmasq iw nft
+# or: command -v dhcpcd iptables
+```
+
+The WebUI **LAN → WiFi diagnostics** and `GET /api/hotspot` also report missing tools + an `install_hint`.
+
 ### 1. Build-time (Go modules)
 
 | Module | Role | Required? |
@@ -38,64 +77,44 @@ It keeps USB power stable (autosuspend / `power/control`), talks **AT** over ser
 | **[go.bug.st/serial](https://github.com/bugst/go-serial)** `v1.8.0` | Serial port open/read/write, USB port enumeration | **Yes** |
 | **golang.org/x/sys** | Transitive (serial on Linux) | **Yes** (indirect) |
 
-Everything else is **Go standard library** (`net/http`, `os`, `embed`, `testing`, …).
+Everything else is **Go standard library** (`net/http`, `os`, `embed`, `html/template`, `testing`, …).
 
 ```bash
-# after clone
-go mod download   # or: go build ./...
+go mod download   # or: go build -o fm350-manager ./cmd/app
 ```
 
-`go.mod`:
+### 2. Runtime — OS packages (detail)
 
-```text
-module fm350-monitor
-require go.bug.st/serial v1.8.0
-// golang.org/x/sys is indirect
-```
-
-### 2. Runtime — system packages (Debian/Ubuntu)
-
-| Package / tool | Purpose | Required? |
-|----------------|---------|-----------|
-| **Go toolchain** | Build / `go run` | Build only |
-| **sudo** | Auto-elevate for sysfs/serial/USB reset | Recommended |
-| **iproute2** (`ip`) | RNDIS: `ip link set … up/down` | For RNDIS data connect |
-| **isc-dhcp-client** (`dhclient`) **or** **dhcpcd** | RNDIS address acquisition | For RNDIS data connect |
-| **libmbim-utils** (`mbimcli`) | MBIM connect/disconnect/query | Only if `/dev/cdc-wdm*` exists |
-| **usbutils** (`lsusb`) | Manual debugging | Optional |
-
-Install example (Ubuntu/Debian):
-
-```bash
-# Build
-sudo apt-get install -y golang-go git
-
-# Runtime helpers (pick DHCP client you prefer)
-sudo apt-get install -y iproute2 isc-dhcp-client
-
-# Only needed for true MBIM compositions
-sudo apt-get install -y libmbim-utils
-
-# Optional diagnostics
-sudo apt-get install -y usbutils
-```
+| Package / tool | Purpose | When |
+|----------------|---------|------|
+| **sudo** | Auto-elevate for sysfs/serial/USB/hotspot | Recommended (default) |
+| **iproute2** (`ip`) | Link up/down, addresses, routing | RNDIS + hotspot |
+| **isc-dhcp-client** or **dhcpcd** | DHCP **client** on RNDIS WAN iface | RNDIS data connect |
+| **hostapd** | WiFi **access point** (WPA2) | Hotspot |
+| **dnsmasq** | DHCP/DNS **server** for WiFi clients | Hotspot |
+| **iw** | Detect AP mode / stations | Hotspot discovery & clients |
+| **nftables** (`nft`) or **iptables** | IPv4 forward + MASQUERADE WAN | Hotspot NAT |
+| **wireless-regdb** | Regulatory domain for channels | Hotspot (esp. country code) |
+| **libmbim-utils** (`mbimcli`) | MBIM connect/disconnect | MBIM-only compositions |
+| **usbutils** (`lsusb`) | Manual USB debugging | Optional |
 
 Other distros (approximate):
 
-| Distro | Serial stack | DHCP | MBIM CLI |
-|--------|--------------|------|----------|
-| Fedora/RHEL | (kernel + go serial) | `dhcp-client` / `dhcpcd` | `libmbim` / `libmbim-utils` |
-| Arch | same | `dhclient` / `dhcpcd` | `libmbim` |
+| Distro | WAN DHCP | Hotspot AP stack | MBIM |
+|--------|----------|------------------|------|
+| Fedora/RHEL | `dhcp-client` / `dhcpcd` | `hostapd` `dnsmasq` `iw` `nftables` | `libmbim-utils` |
+| Arch | `dhclient` / `dhcpcd` | same | `libmbim` |
 
 ### 3. Kernel modules / drivers (usually auto-loaded)
 
 | Module / driver | When |
 |-----------------|------|
-| **option** + **usb_wwan** + **usbserial** | Multi-serial AT ports (`/dev/ttyUSB*`) |
-| **rndis_host** | RNDIS data (network iface e.g. `enx…`) — **common FM350 USB mode** |
-| **cdc_mbim** | MBIM control node `/dev/cdc-wdm*` — **only if composition is MBIM** |
+| **option** + **usb_wwan** + **usbserial** | Multi-serial AT (`/dev/ttyUSB*`) |
+| **rndis_host** | RNDIS WAN iface (e.g. `enx…`) — **common FM350 mode** |
+| **cdc_mbim** | `/dev/cdc-wdm*` if composition is MBIM |
+| Host WiFi (`iwlwifi`, etc.) | Software AP on `wlan*` / `wlp*` |
 
-No out-of-tree driver is required by this project.
+No out-of-tree modem driver is required by this project. Host WiFi must support **AP mode** (`iw phy … info` → `* AP`).
 
 ### 4. Device nodes & privileges
 
@@ -106,19 +125,22 @@ No out-of-tree driver is required by this project.
 | `/sys/bus/usb/devices/…/power/control` | Write — typically **root** |
 | `/dev/bus/usb/BBB/DDD` | `USBDEVFS_RESET` — typically **root** |
 | `/dev/cdc-wdm*` | MBIM — root or udev rules |
-| `ip` / DHCP | RNDIS connect — typically **root** |
+| `ip` / DHCP client | RNDIS — typically **root** |
+| `hostapd` / `dnsmasq` / `nft` | Hotspot — typically **root** |
+| `/run/fm350-manager` | Hotspot conf/logs (systemd `RuntimeDirectory`) |
+| `/var/lib/fm350-manager` | History + `hotspot.json` (systemd `StateDirectory`) |
 
 ```bash
-# Non-root serial only (no hard reset / limited sysfs):
+# Non-root serial only (no hard reset / limited sysfs / no hotspot):
 sudo usermod -aG dialout "$USER"   # then re-login
 ```
 
-Default app behavior: if not root, **re-runs under `sudo`** (pass `-no-elevate` to disable).
+Default: if not root, the process **re-execs under `sudo`** (`-no-elevate` to disable). Systemd unit runs as **root**.
 
 ### 5. Not required
 
 - Node.js / npm / webpack (UI is embedded vanilla JS)
-- ModemManager / NetworkManager (optional on the host; not used by the daemon)
+- ModemManager / NetworkManager (not used; for hotspot, leave wlan **unmanaged** if NM is installed)
 - SQLite or other databases (history is memory ± JSON file)
 
 ---

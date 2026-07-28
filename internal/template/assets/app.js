@@ -794,7 +794,8 @@ function refreshHotspot() {
                         const o = document.createElement('option');
                         o.value = d.iface;
                         o.textContent = d.label || d.iface;
-                        o.disabled = !d.supports_ap;
+                        // Only disable when AP is known unsupported (not when iw missing).
+                        o.disabled = !!(d.ap_known && !d.supports_ap);
                         sel.appendChild(o);
                     });
                 }
@@ -808,23 +809,67 @@ function refreshHotspot() {
                 if (ch && !ch.dataset.dirty) ch.value = st.config.channel || 6;
             }
             const hint = document.getElementById('hotspot-hint');
-            if (hint && st.error) {
-                hint.textContent = st.error + (st.note ? ' — ' + st.note : '');
-            } else if (hint && st.note) {
-                hint.textContent = st.note;
+            if (hint) {
+                if (st.error) {
+                    hint.textContent = st.error + (st.note ? ' — ' + st.note : '');
+                } else if (st.install_hint) {
+                    hint.textContent = 'Missing tools: ' + st.install_hint + (st.note ? ' — ' + st.note : '');
+                } else if (st.note) {
+                    hint.textContent = st.note;
+                }
             }
 
             const startBtn = document.getElementById('hotspot-start-btn');
             if (startBtn) {
                 const toolsOk = t.hostapd && t.dnsmasq && t.ip && (t.nftables || t.iptables);
-                const hasUplink = !!(st.uplink_iface || (st.uplink_addrs && st.uplink_addrs.length));
+                const hasUplink = !!(st.uplink_addrs && st.uplink_addrs.length);
                 startBtn.disabled = !toolsOk || st.state === 'running';
-                startBtn.title = !toolsOk ? 'Missing host tools' : (!hasUplink ? 'Connect WAN first' : '');
+                const tips = [];
+                if (!toolsOk) tips.push(st.install_hint || 'install hostapd dnsmasq iw');
+                if (!hasUplink) tips.push('connect WAN/RNDIS for IPv4 uplink');
+                startBtn.title = tips.join('; ') || 'Start software AP';
             }
+
+            renderHotspotDiag(st);
 
             updateOverview();
         })
         .catch(e => console.error('hotspot status', e));
+}
+
+function renderHotspotDiag(st) {
+    const body = document.getElementById('hotspot-diag-body');
+    const hintEl = document.getElementById('hotspot-install-hint');
+    if (hintEl) {
+        hintEl.textContent = st.install_hint
+            ? st.install_hint
+            : (st.diagnostics && st.diagnostics.notes && st.diagnostics.notes.length
+                ? st.diagnostics.notes.join(' · ')
+                : 'Tools look ready.');
+    }
+    if (!body) return;
+    const devs = (st.diagnostics && st.diagnostics.interfaces) || st.devices || [];
+    body.innerHTML = '';
+    if (!devs.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.className = 'muted';
+        td.textContent = 'No wireless interfaces (check kernel/driver)';
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+    }
+    devs.forEach(d => {
+        const tr = document.createElement('tr');
+        const ap = d.ap_known ? (d.supports_ap ? 'yes' : 'no') : 'unknown';
+        [d.iface || '—', d.driver || '—', d.oper_state || '—', ap, d.phy || '—'].forEach(v => {
+            const td = document.createElement('td');
+            td.textContent = v;
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
 }
 
 function hotspotFormBody() {

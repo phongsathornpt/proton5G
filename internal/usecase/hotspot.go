@@ -58,17 +58,33 @@ func (s *ModemService) HotspotStatus() domain.HotspotStatus {
 		uplinkAddrs = s.net.IfaceAddrs(uplink)
 	}
 
+	// Default empty wlan to first discovered wireless iface (e.g. wlp3s0).
+	if cfg.WlanIface == "" {
+		if devs := s.hotspot.ListWiFiDevices(); len(devs) > 0 {
+			cfg.WlanIface = devs[0].Iface
+		}
+	}
+
+	diag := s.hotspot.Diagnostics()
 	st.State = state
 	st.Config = cfg.RedactedConfig()
 	st.Uplink = uplink
 	st.UplinkAddrs = uplinkAddrs
 	st.LANAddrs = lanAddrs
-	st.Tools = s.hotspot.Tools()
-	st.Devices = s.hotspot.ListWiFiDevices()
+	st.Tools = diag.Tools
+	st.InstallHint = diag.InstallHint
+	st.Devices = diag.Interfaces
+	if len(st.Devices) == 0 {
+		st.Devices = s.hotspot.ListWiFiDevices()
+	}
+	st.Diagnostics = diag
 	st.Clients = clients
 	st.Error = hsErr
 	if uplink == "" {
 		st.Note += " Select/connect a RNDIS data interface before starting the hotspot."
+	}
+	if diag.InstallHint != "" {
+		st.Note += " Install tools: " + diag.InstallHint + "."
 	}
 	return st
 }
@@ -242,6 +258,11 @@ func (s *ModemService) HotspotStart(req domain.HotspotStartRequest) (domain.Hots
 	}
 	if cfg.SSID == "" {
 		cfg.SSID = appdefaults.HotspotSSID
+	}
+	if cfg.WlanIface == "" {
+		if devs := s.hotspot.ListWiFiDevices(); len(devs) > 0 {
+			cfg.WlanIface = devs[0].Iface
+		}
 	}
 
 	if err := domain.ValidateHotspotConfig(cfg); err != nil {

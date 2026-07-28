@@ -2,6 +2,8 @@ package repository
 
 import "fm350-monitor/internal/pkg/domain"
 
+// Ensure HotspotRepo methods stay in sync with usecase port.
+
 // HotspotRepo adapts HotspotManager to the usecase HotspotRepository port.
 type HotspotRepo struct {
 	m *HotspotManager
@@ -34,4 +36,9 @@ func (r *HotspotRepo) IsRunning() bool {
 
 func (r *HotspotRepo) StatusExtras() (lanAddrs, uplinkAddrs []string, clients []domain.HotspotClient) {
 	return r.m.StatusExtras()
+}
+
+// Diagnostics returns host WiFi / tools debug info.
+func (r *HotspotRepo) Diagnostics() domain.HotspotDiagnostics {
+	return CollectHotspotDiagnostics()
 }

@@ -42,6 +42,20 @@
             <p class="hint" id="hotspot-hint">Clients get DHCP on 192.168.50.0/24 and share the LTE uplink (NAT). Needs hostapd, dnsmasq, iw, nft/iptables. Unmanage wlan in NetworkManager if hostapd fails.</p>
         </section>
         <section class="card full-width">
+            <h2>WiFi diagnostics</h2>
+            <p class="hint" id="hotspot-install-hint">—</p>
+            <div class="table-wrap">
+                <table class="data-table" id="hotspot-diag-table">
+                    <thead>
+                        <tr><th>Iface</th><th>Driver</th><th>State</th><th>AP</th><th>Phy</th></tr>
+                    </thead>
+                    <tbody id="hotspot-diag-body">
+                        <tr><td colspan="5" class="muted">Refresh hotspot status…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        <section class="card full-width">
             <h2>Associated clients</h2>
             <div class="table-wrap">
                 <table class="data-table" id="hotspot-client-table">

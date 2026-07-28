@@ -15,10 +15,35 @@ Client ──WiFi──► wlan0 (AP) ──NAT──► enx… (FM350) ──LT
 ## Host packages
 
 ```bash
-# Debian/Ubuntu
-sudo apt-get install -y hostapd dnsmasq iw iproute2 iptables
-# optional but preferred for NAT cleanup:
+# Debian/Ubuntu — required for software AP
+sudo apt-get install -y hostapd dnsmasq iw iproute2 wireless-regdb
+# NAT (prefer nftables):
 sudo apt-get install -y nftables
+# or: iptables
+```
+
+**This project machine (example):** Intel `wlp3s0` (`iwlwifi`, PCI 8086:3166). Without `iw`/`hostapd` the app still **lists** the iface but Start fails with an install hint. Prefer **2.4 GHz** (channel 6) on iwlwifi.
+
+### Debug checklist (host)
+
+```bash
+# 1) tools
+command -v iw hostapd dnsmasq nft ip
+
+# 2) radio
+ip link show wlp3s0   # or your wlan*
+rfkill list
+iw phy phy0 info | sed -n '/Supported interface modes/,/Band/p'   # need "* AP"
+
+# 3) bring up (smoke)
+sudo ip link set wlp3s0 up
+iw dev
+
+# 4) LTE uplink must have IPv4 before NAT hotspot
+ip -4 -br addr show   # enx… RNDIS after Data Connect
+
+# 5) hostapd logs (after failed Start via manager)
+sudo tail -50 /run/fm350-manager/hostapd.log
 ```
 
 ## NetworkManager

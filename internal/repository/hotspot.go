@@ -69,25 +69,11 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 	if h.running {
 		return "", fmt.Errorf("hotspot already running")
 	}
-	tools := HotspotToolsPresent()
-	if !tools.Hostapd {
-		return "", fmt.Errorf("hostapd not found (install hostapd)")
+	if err := h.preflight(cfg, uplink); err != nil {
+		return "", err
 	}
-	if !tools.Dnsmasq {
-		return "", fmt.Errorf("dnsmasq not found (install dnsmasq)")
-	}
-	if !tools.IP {
-		return "", fmt.Errorf("ip (iproute2) not found")
-	}
-	if !tools.Nftables && !tools.Iptables {
-		return "", fmt.Errorf("need nft or iptables for NAT")
-	}
-	if err := domain.ValidateIfaceName(uplink); err != nil {
-		return "", fmt.Errorf("uplink: %w", err)
-	}
-	if addrs := NetIfaceAddrs(uplink); len(addrs) == 0 {
-		return "", fmt.Errorf("uplink %s has no IPv4 address — connect data bearer first", uplink)
-	}
+	hostapdBin := resolveTool("hostapd")
+	dnsmasqBin := resolveTool("dnsmasq")
 
 	if err := os.MkdirAll(h.runtimeDir, 0o700); err != nil {
 		return "", fmt.Errorf("runtime dir: %w", err)
@@ -149,36 +135,65 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 		return strings.Join(logParts, "\n"), fmt.Errorf("nat: %w", err)
 	}
 
-	// hostapd (supervised, own process group)
-	hCmd := exec.Command("hostapd", hostapdPath)
+	// hostapd (supervised, own process group); capture stderr for diagnostics
+	hostapdLog := filepath.Join(h.runtimeDir, "hostapd.log")
+	hLogFile, _ := os.OpenFile(hostapdLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	hCmd := exec.Command(hostapdBin, hostapdPath)
 	hCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	hCmd.Stdout = nil
-	hCmd.Stderr = nil
+	if hLogFile != nil {
+		hCmd.Stdout = hLogFile
+		hCmd.Stderr = hLogFile
+	}
 	if err := hCmd.Start(); err != nil {
+		if hLogFile != nil {
+			_ = hLogFile.Close()
+		}
 		_ = h.removeNATLocked(cfg.WlanIface, uplink)
 		h.cleanupPartialLocked(cfg.WlanIface)
 		return strings.Join(logParts, "\n"), fmt.Errorf("hostapd start: %w", err)
 	}
-	// Brief settle
-	time.Sleep(300 * time.Millisecond)
-	if hCmd.ProcessState != nil && hCmd.ProcessState.Exited() {
-		_ = h.removeNATLocked(cfg.WlanIface, uplink)
-		h.cleanupPartialLocked(cfg.WlanIface)
-		return strings.Join(logParts, "\n"), fmt.Errorf("hostapd exited immediately")
+	// Brief settle — ProcessState is only set after Wait; probe with signal 0.
+	time.Sleep(400 * time.Millisecond)
+	if hCmd.Process != nil {
+		if err := hCmd.Process.Signal(syscall.Signal(0)); err != nil {
+			if hLogFile != nil {
+				_ = hLogFile.Close()
+			}
+			_ = h.removeNATLocked(cfg.WlanIface, uplink)
+			h.cleanupPartialLocked(cfg.WlanIface)
+			return strings.Join(logParts, "\n"), fmt.Errorf("hostapd exited immediately: %s", tailFile(hostapdLog, 1200))
+		}
 	}
 
-	// dnsmasq foreground-ish: --keep-in-foreground if supported, else normal with pid
-	dCmd := exec.Command("dnsmasq", "--conf-file="+dnsmasqPath, "--keep-in-foreground", "--no-resolv")
+	// dnsmasq foreground-ish: --keep-in-foreground if supported, else -d
+	dnsmasqLog := filepath.Join(h.runtimeDir, "dnsmasq.log")
+	dLogFile, _ := os.OpenFile(dnsmasqLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	dCmd := exec.Command(dnsmasqBin, "--conf-file="+dnsmasqPath, "--keep-in-foreground", "--no-resolv")
 	dCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if dLogFile != nil {
+		dCmd.Stdout = dLogFile
+		dCmd.Stderr = dLogFile
+	}
 	if err := dCmd.Start(); err != nil {
 		// try without keep-in-foreground
-		dCmd = exec.Command("dnsmasq", "--conf-file="+dnsmasqPath, "-d")
+		if dLogFile != nil {
+			_ = dLogFile.Close()
+		}
+		dLogFile, _ = os.OpenFile(dnsmasqLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		dCmd = exec.Command(dnsmasqBin, "--conf-file="+dnsmasqPath, "-d")
 		dCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if dLogFile != nil {
+			dCmd.Stdout = dLogFile
+			dCmd.Stderr = dLogFile
+		}
 		if err2 := dCmd.Start(); err2 != nil {
+			if dLogFile != nil {
+				_ = dLogFile.Close()
+			}
 			_ = killProcessGroup(hCmd)
 			_ = h.removeNATLocked(cfg.WlanIface, uplink)
 			h.cleanupPartialLocked(cfg.WlanIface)
-			return strings.Join(logParts, "\n"), fmt.Errorf("dnsmasq start: %v / %v", err, err2)
+			return strings.Join(logParts, "\n"), fmt.Errorf("dnsmasq start: %v / %v; %s", err, err2, tailFile(dnsmasqLog, 800))
 		}
 	}
 
@@ -305,6 +320,56 @@ func (h *HotspotManager) removeNATLocked(wlan, uplink string) error {
 		_, _ = runCmd(3*time.Second, "iptables", r...)
 	}
 	return nil
+}
+
+// preflight validates tools, wlan, and uplink before mutating state.
+func (h *HotspotManager) preflight(cfg domain.HotspotConfig, uplink string) error {
+	tools := HotspotToolsPresent()
+	if !tools.Hostapd {
+		hint := HotspotInstallHint(tools)
+		return fmt.Errorf("hostapd not found (%s)", hint)
+	}
+	if !tools.Dnsmasq {
+		return fmt.Errorf("dnsmasq not found (%s)", HotspotInstallHint(tools))
+	}
+	if !tools.IP {
+		return fmt.Errorf("ip (iproute2) not found")
+	}
+	if !tools.Nftables && !tools.Iptables {
+		return fmt.Errorf("need nft or iptables for NAT (%s)", HotspotInstallHint(tools))
+	}
+	if err := domain.ValidateIfaceName(cfg.WlanIface); err != nil {
+		return fmt.Errorf("wlan_iface: %w", err)
+	}
+	if !isWirelessIface(cfg.WlanIface) {
+		return fmt.Errorf("wlan %s is not a wireless interface", cfg.WlanIface)
+	}
+	if tools.Iw {
+		phy := wirelessPhy(cfg.WlanIface)
+		_, ap := wifiAPModes(phy, cfg.WlanIface)
+		if !ap {
+			return fmt.Errorf("wlan %s does not advertise AP mode (iw); cannot start software AP", cfg.WlanIface)
+		}
+	}
+	if err := domain.ValidateIfaceName(uplink); err != nil {
+		return fmt.Errorf("uplink: %w", err)
+	}
+	if addrs := NetIfaceAddrs(uplink); len(addrs) == 0 {
+		return fmt.Errorf("uplink %s has no IPv4 address — connect data bearer (RNDIS) first", uplink)
+	}
+	return nil
+}
+
+func tailFile(path string, max int) string {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return "(no log)"
+	}
+	s := strings.TrimSpace(string(b))
+	if len(s) > max {
+		s = s[len(s)-max:]
+	}
+	return s
 }
 
 func killProcessGroup(cmd *exec.Cmd) error {

@@ -82,6 +82,14 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] layout.js nav; app.js behavior; boot.js
 - [ ] Optional: split app.js into per-feature JS modules
 
+## WiFi host debug + diagnostics
+- [x] Tool LookPath + sbin fallbacks; install_hint
+- [x] Discovery when iw missing (list wlan, AP unknown, selectable)
+- [x] Default wlan to first wireless iface
+- [x] Diagnostics on HotspotStatus (driver, operstate, notes)
+- [x] Preflight + hostapd/dnsmasq stderr logs under runtime dir
+- [x] LAN UI diagnostics table; docs runbook
+
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)
 - [ ] **True MBIM composition**: only if a firmware mode document lists a non-RNDIS profile for this SKU

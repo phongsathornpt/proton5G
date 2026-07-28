@@ -63,6 +63,7 @@ type DeviceInventory interface {
 type HotspotRepository interface {
 	ListWiFiDevices() []domain.WiFiDevice
 	Tools() domain.HotspotTools
+	Diagnostics() domain.HotspotDiagnostics
 	Start(cfg domain.HotspotConfig, uplink string) (string, error)
 	Stop() (string, error)
 	IsRunning() bool

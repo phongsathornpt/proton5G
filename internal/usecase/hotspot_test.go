@@ -22,6 +22,10 @@ func (f *fakeHotspot) Tools() domain.HotspotTools {
 	}
 	return domain.HotspotTools{Hostapd: true, Dnsmasq: true, Iw: true, IP: true, Nftables: true}
 }
+func (f *fakeHotspot) Diagnostics() domain.HotspotDiagnostics {
+	t := f.Tools()
+	return domain.HotspotDiagnostics{Tools: t, Interfaces: f.devs}
+}
 func (f *fakeHotspot) Start(cfg domain.HotspotConfig, uplink string) (string, error) {
 	f.lastUp = uplink
 	if f.startFn != nil {

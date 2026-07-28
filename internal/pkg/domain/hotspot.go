@@ -39,7 +39,10 @@ type HotspotConfig struct {
 type WiFiDevice struct {
 	Iface      string   `json:"iface"`
 	Phy        string   `json:"phy,omitempty"`
+	Driver     string   `json:"driver,omitempty"`
+	OperState  string   `json:"oper_state,omitempty"`
 	SupportsAP bool     `json:"supports_ap"`
+	APKnown    bool     `json:"ap_known"` // false when iw missing / AP capability unverified
 	Modes      []string `json:"modes,omitempty"`
 	Label      string   `json:"label"`
 }
@@ -54,6 +57,14 @@ type HotspotTools struct {
 	Iptables bool `json:"iptables"`
 }
 
+// HotspotDiagnostics is a host WiFi / tools snapshot for debugging AP start.
+type HotspotDiagnostics struct {
+	Tools       HotspotTools `json:"tools"`
+	InstallHint string       `json:"install_hint,omitempty"`
+	Interfaces  []WiFiDevice `json:"interfaces"`
+	Notes       []string     `json:"notes,omitempty"`
+}
+
 // HotspotClient is an associated station (optional / best-effort).
 type HotspotClient struct {
 	MAC  string `json:"mac,omitempty"`
@@ -63,16 +74,18 @@ type HotspotClient struct {
 
 // HotspotStatus is the WebUI/API snapshot for the software AP.
 type HotspotStatus struct {
-	State       string          `json:"state"`
-	Config      HotspotConfig   `json:"config"`
-	Uplink      string          `json:"uplink_iface,omitempty"`
-	UplinkAddrs []string        `json:"uplink_addrs,omitempty"`
-	LANAddrs    []string        `json:"lan_addrs,omitempty"`
-	Tools       HotspotTools    `json:"tools"`
-	Devices     []WiFiDevice    `json:"devices,omitempty"`
-	Clients     []HotspotClient `json:"clients,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	Note        string          `json:"note,omitempty"`
+	State        string              `json:"state"`
+	Config       HotspotConfig       `json:"config"`
+	Uplink       string              `json:"uplink_iface,omitempty"`
+	UplinkAddrs  []string            `json:"uplink_addrs,omitempty"`
+	LANAddrs     []string            `json:"lan_addrs,omitempty"`
+	Tools        HotspotTools        `json:"tools"`
+	InstallHint  string              `json:"install_hint,omitempty"`
+	Devices      []WiFiDevice        `json:"devices,omitempty"`
+	Diagnostics  HotspotDiagnostics  `json:"diagnostics,omitempty"`
+	Clients      []HotspotClient     `json:"clients,omitempty"`
+	Error        string              `json:"error,omitempty"`
+	Note         string              `json:"note,omitempty"`
 }
 
 // HotspotStartRequest optionally overrides config fields for start.
