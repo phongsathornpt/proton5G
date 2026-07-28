@@ -47,14 +47,14 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 ## Concurrency (goroutines)
 - [x] Background `RunStatusPoller` owns AT status + recovery; cache for SSE
 - [x] Short `ModemService.mu` critical sections (no lock across AT I/O)
-- [x] `pollMu` serializes concurrent `Status()` / poller
+- [x] `atMu` / `withAT` serializes poll + control + rediscover + port lifecycle (AT work queue)
 - [x] SSE + default `GET /api/status` use `CachedStatus`; `?fresh=1` forces poll
 - [x] `main`: WaitGroup for watchdog / poller / history; clean shutdown
 - [x] Flag `-poll` (default 2s)
 - [x] Parallel AT inventory probes (`ProbeATPortsCached`, ListModems)
 - [x] Parallel DiscoverATPort (same helper; list-order preference preserved)
 - [x] Optional SSE broadcast hub (`SSEHub`: one marshal + fan-out; `Server.Run` from main)
-- [ ] Optional AT work queue for control cmds (only if contention shows up)
+- [x] Optional AT work queue for control cmds (`withAT` mutex gate; no async job API)
 
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)

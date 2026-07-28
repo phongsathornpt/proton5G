@@ -44,20 +44,20 @@ cmd/app/main.go  --> flags, wiring, lifecycle
 ```
 main
   ├─ go RunWatchdog(ctx)          // USB only
-  ├─ go RunStatusPoller(ctx)      // sole AT status owner → cache
+  ├─ go RunStatusPoller(ctx)      // status samples → cache (via atMu)
   ├─ go SSEHub.Run(ctx)           // marshal cache once → fan-out
   ├─ go history saver (optional)
   └─ go http.Server
-        ├─ GET /api/events × N  → subscribe to hub (no AT, no per-client marshal)
+        ├─ GET /api/events × N  → subscribe to hub (no AT)
         ├─ GET /api/status → cache (or Status if ?fresh=1)
-        └─ POST control → AT (serialized by at.Client mutex)
+        └─ POST control → atMu → AT (same exclusive section as poller)
 ```
 
 - **SSE hub** (`internal/handler/sse_hub.go`): one ticker marshals `CachedStatus()` and non-blocking-sends to subscriber channels; slow clients drop frames. Wire format unchanged (`data: <FullStatus JSON>`).
-- `pollMu` serializes full polls (poller vs `Status()`).
-- `ModemService.mu` is **not** held across AT I/O (short critical sections only).
-- Serial port remains exclusive via `at.Client` mutex — do not fan-out AT commands on one open port.
-- **Inventory / discover**: `ProbeATPortsCached` probes distinct `ttyUSB*` in parallel (bounded, default 6), with a 15s TTL cache; skips the manager’s open AT port.
+- **AT work queue (`atMu` / `withAT`)**: single exclusive section for manager-port AT work — status poll, recovery/rediscover, control (`SetAPN`/`SetRAT`/`RawAT`/`USBMode`/`SetUSBMode`), and port lifecycle (`Close`/`SetPortName` on select/reset). FIFO via mutex waiters; HTTP still blocks until the job finishes. Prevents control from interleaving mid-`GetFullStatus` or racing rediscover.
+- Lock order: **`atMu` → short `s.mu` only** (never `s.mu` then `atMu`). `ModemService.mu` is not held across AT I/O.
+- `at.Client` still mutexes each serial write/read; usecase `atMu` is the multi-command / lifecycle gate.
+- **Inventory / discover**: `ProbeATPortsCached` probes distinct `ttyUSB*` in parallel (bounded, default 6), with a 15s TTL cache; skips the manager’s open AT port. Rediscover runs only under `atMu` after `Close`.
 
 3. **Handler (`internal/handler`)**
    - REST + SSE only; depends on usecase interface, not repositories.

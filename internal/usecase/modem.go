@@ -25,7 +25,7 @@ type ModemService struct {
 	product   string
 
 	mu              sync.RWMutex
-	pollMu          sync.Mutex // serializes full status polls (poller + Status())
+	atMu            sync.Mutex // AT work queue: poll, control, rediscover, port lifecycle
 	status          domain.FullStatus
 	selectedModemID string
 	selectedMBIM    string
@@ -87,8 +87,17 @@ func (s *ModemService) CachedStatus() domain.FullStatus {
 	return s.status
 }
 
+// withAT runs fn as the sole owner of the manager AT port (FIFO mutex "work queue").
+// Covers control, poll, rediscover, and port lifecycle. Do not call withAT while
+// holding s.mu (lock order: atMu → short s.mu only). fn must not re-enter withAT.
+func (s *ModemService) withAT(fn func() error) error {
+	s.atMu.Lock()
+	defer s.atMu.Unlock()
+	return fn()
+}
+
 // RunStatusPoller periodically refreshes the status cache until ctx is cancelled.
-// Single owner of recovery-driven AT polls; start once from main.
+// Status samples and recovery share atMu with control commands; start once from main.
 func (s *ModemService) RunStatusPoller(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = appdefaults.StatusPollInterval
@@ -108,11 +117,11 @@ func (s *ModemService) RunStatusPoller(ctx context.Context, interval time.Durati
 	}
 }
 
-// pollStatus performs one full USB+AT sample. AT I/O runs outside s.mu; polls are
-// serialized with pollMu so recovery (rediscover/reset) is not concurrent.
+// pollStatus performs one full USB+AT sample. AT I/O runs outside s.mu; all manager-port
+// AT work is serialized on atMu so control cannot interleave with poll/recovery.
 func (s *ModemService) pollStatus() domain.FullStatus {
-	s.pollMu.Lock()
-	defer s.pollMu.Unlock()
+	s.atMu.Lock()
+	defer s.atMu.Unlock()
 
 	modemStat := s.usb.Check("")
 	now := time.Now().UTC()
@@ -153,7 +162,7 @@ func (s *ModemService) pollStatus() domain.FullStatus {
 	return st
 }
 
-// handleATFailure updates error state and may rediscover/reset. Called under pollMu only.
+// handleATFailure updates error state and may rediscover/reset. Called under atMu only.
 func (s *ModemService) handleATFailure(modemStat domain.ModemStatus, err error) domain.FullStatus {
 	now := time.Now().UTC()
 
@@ -253,9 +262,6 @@ func (s *ModemService) History() []domain.SignalSample {
 }
 
 func (s *ModemService) SetAPN(cfg domain.APNConfig) error {
-	if s.at == nil {
-		return errModemUnavailable
-	}
 	cid := cfg.CID
 	if cid == 0 {
 		cid = appdefaults.DefaultCID
@@ -270,24 +276,37 @@ func (s *ModemService) SetAPN(cfg domain.APNConfig) error {
 		}
 		pdp = parsed
 	}
-	return s.at.SetAPN(cid, pdp, cfg.APN)
+	return s.withAT(func() error {
+		if s.at == nil {
+			return errModemUnavailable
+		}
+		return s.at.SetAPN(cid, pdp, cfg.APN)
+	})
 }
 
 func (s *ModemService) SetRAT(pref domain.RATModePref) error {
-	if s.at == nil {
-		return errModemUnavailable
-	}
-	return s.at.SetRATMode(pref)
+	return s.withAT(func() error {
+		if s.at == nil {
+			return errModemUnavailable
+		}
+		return s.at.SetRATMode(pref)
+	})
 }
 
 func (s *ModemService) RawAT(cmd string) (string, error) {
-	if s.at == nil {
-		return "", errModemUnavailable
-	}
-	if err := s.at.EnsureConnected(); err != nil {
-		return "", err
-	}
-	return s.at.SendRaw(cmd)
+	var resp string
+	err := s.withAT(func() error {
+		if s.at == nil {
+			return errModemUnavailable
+		}
+		if err := s.at.EnsureConnected(); err != nil {
+			return err
+		}
+		var err error
+		resp, err = s.at.SendRaw(cmd)
+		return err
+	})
+	return resp, err
 }
 
 func (s *ModemService) USBReset() (sysPath string, err error) {
@@ -295,13 +314,17 @@ func (s *ModemService) USBReset() (sysPath string, err error) {
 	if !st.Connected {
 		return "", errModemUnavailable
 	}
-	if err := s.usb.HardReset(st.SysPath); err != nil {
-		return st.SysPath, err
-	}
-	if s.at != nil {
-		_ = s.at.Close()
-	}
-	return st.SysPath, nil
+	// Serialize port close with other AT work; USB ioctl itself is not AT.
+	err = s.withAT(func() error {
+		if resetErr := s.usb.HardReset(st.SysPath); resetErr != nil {
+			return resetErr
+		}
+		if s.at != nil {
+			_ = s.at.Close()
+		}
+		return nil
+	})
+	return st.SysPath, err
 }
 
 func (s *ModemService) MBIMStatus() map[string]any {
@@ -357,12 +380,12 @@ func (s *ModemService) ListModems() domain.ModemInventory {
 }
 
 // SelectModem switches active AT port / MBIM device for subsequent operations.
+// Selection state uses s.mu; AT port switch uses atMu (never s.mu → atMu).
 func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemInventory, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	inv := s.buildInventoryLocked()
 	if req.ModemID == "" && req.ATPort == "" && req.MBIMDevice == "" && req.NetIface == "" {
+		s.mu.Unlock()
 		return inv, fmt.Errorf("modem_id, at_port, mbim_device, or net_iface required")
 	}
 
@@ -377,6 +400,7 @@ func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemI
 			}
 		}
 		if !ok {
+			s.mu.Unlock()
 			return inv, fmt.Errorf("unknown modem_id %q", req.ModemID)
 		}
 	} else if req.ATPort != "" {
@@ -419,6 +443,7 @@ func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemI
 				}
 			}
 			if !found && !strings.HasPrefix(modem.ID, "serial:") {
+				s.mu.Unlock()
 				return inv, fmt.Errorf("at_port %q not on modem %s", atPort, modem.ID)
 			}
 		}
@@ -456,14 +481,27 @@ func (s *ModemService) SelectModem(req domain.ModemSelectRequest) (domain.ModemI
 		}
 	}
 
-	if atPort != "" && s.at != nil {
-		if s.at.PortName() != atPort {
-			log.Printf("[INFO] User selected AT port %s (modem %s)", atPort, s.selectedModemID)
-			s.at.SetPortName(atPort)
-			_ = s.at.Close()
-		}
+	selectedID := s.selectedModemID
+	needPortSwitch := atPort != "" && s.at != nil
+	s.mu.Unlock()
+
+	if needPortSwitch {
+		// Port lifecycle under atMu only (lock order: never s.mu → atMu).
+		_ = s.withAT(func() error {
+			if s.at == nil {
+				return nil
+			}
+			if s.at.PortName() != atPort {
+				log.Printf("[INFO] User selected AT port %s (modem %s)", atPort, selectedID)
+				s.at.SetPortName(atPort)
+				_ = s.at.Close()
+			}
+			return nil
+		})
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.buildInventoryLocked(), nil
 }
 
@@ -673,47 +711,67 @@ func (s *ModemService) USBMode() domain.USBModeInfo {
 		Supported: domain.KnownUSBModes(),
 		Note:      "Stock FM350 USB modes 40/41 are RNDIS+serial (not MBIM). Changing mode re-enumerates USB; reconnect may take a few seconds.",
 	}
+	_ = s.withAT(func() error {
+		s.fillUSBModeLocked(&info)
+		return nil
+	})
+	return info
+}
+
+// fillUSBModeLocked queries GTUSBMODE. Caller must hold atMu.
+func (s *ModemService) fillUSBModeLocked(info *domain.USBModeInfo) {
 	if s.at == nil {
 		info.Error = "AT client unavailable"
-		return info
+		return
 	}
 	mode, err := s.at.GetUSBMode()
 	if err != nil {
 		info.Error = err.Error()
-		return info
+		return
 	}
 	info.Mode = mode
 	info.Label = domain.USBModeLabel(mode)
-	return info
 }
 
 // SetUSBMode applies AT+GTUSBMODE=<mode>, closes the AT port, and schedules rediscovery.
+// Entire sequence runs under atMu so poller/control cannot race re-enumeration.
 func (s *ModemService) SetUSBMode(mode int) (domain.USBModeInfo, error) {
 	if mode <= 0 {
 		return s.USBMode(), fmt.Errorf("invalid mode %d", mode)
 	}
-	if s.at == nil {
-		return domain.USBModeInfo{Supported: domain.KnownUSBModes()}, errModemUnavailable
+	var info domain.USBModeInfo
+	err := s.withAT(func() error {
+		info = domain.USBModeInfo{
+			Supported: domain.KnownUSBModes(),
+			Note:      "Stock FM350 USB modes 40/41 are RNDIS+serial (not MBIM). Changing mode re-enumerates USB; reconnect may take a few seconds.",
+		}
+		if s.at == nil {
+			return errModemUnavailable
+		}
+		if setErr := s.at.SetUSBMode(mode); setErr != nil {
+			s.fillUSBModeLocked(&info)
+			return setErr
+		}
+		log.Printf("[INFO] USB composition set to GTUSBMODE=%d — waiting for re-enumeration", mode)
+		// Allow device to reappear before other AT work resumes.
+		time.Sleep(2 * time.Second)
+		s.mu.Lock()
+		s.lastRediscover = time.Time{} // allow immediate rediscover on next failure
+		s.mu.Unlock()
+		s.rediscoverATPort() // already under atMu
+		s.fillUSBModeLocked(&info)
+		if info.Mode == 0 {
+			// Query may fail mid-reenumerate; report requested mode.
+			info.Mode = mode
+			info.Label = domain.USBModeLabel(mode)
+			info.Note = "Mode command accepted; if query is empty, refresh after re-enumeration."
+		}
+		return nil
+	})
+	if info.Supported == nil {
+		info.Supported = domain.KnownUSBModes()
 	}
-	if err := s.at.SetUSBMode(mode); err != nil {
-		info := s.USBMode()
-		return info, err
-	}
-	log.Printf("[INFO] USB composition set to GTUSBMODE=%d — waiting for re-enumeration", mode)
-	// Allow device to reappear before status polls thrash.
-	time.Sleep(2 * time.Second)
-	s.mu.Lock()
-	s.lastRediscover = time.Time{} // allow immediate rediscover on next failure
-	s.mu.Unlock()
-	s.rediscoverATPort()
-	info := s.USBMode()
-	if info.Mode == 0 {
-		// Query may fail mid-reenumerate; report requested mode.
-		info.Mode = mode
-		info.Label = domain.USBModeLabel(mode)
-		info.Note = "Mode command accepted; if query is empty, refresh after re-enumeration."
-	}
-	return info, nil
+	return info, err
 }
 
 // RunWatchdog periodically enforces USB power policy until ctx is cancelled.
@@ -737,7 +795,7 @@ func (s *ModemService) RunWatchdog(ctx context.Context, interval time.Duration) 
 }
 
 // rediscoverATPort closes the current AT port and probes for a working one.
-// Must not be called while holding s.mu if Discover can block on serial I/O.
+// Caller must hold atMu. Must not hold s.mu (Discover may block on serial I/O).
 func (s *ModemService) rediscoverATPort() {
 	if s.at == nil || s.discover == nil {
 		return

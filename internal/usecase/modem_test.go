@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -498,5 +499,207 @@ func TestConcurrentCachedStatusDuringPoll(t *testing.T) {
 		if err := <-errCh; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// trackingAT records concurrent AT method entry so tests can assert atMu serialization.
+type trackingAT struct {
+	fakeAT
+	mu          sync.Mutex
+	inFlight    int
+	maxInFlight int
+	hold        time.Duration // artificial delay inside AT ops to widen race window
+}
+
+func (f *trackingAT) enter() {
+	f.mu.Lock()
+	f.inFlight++
+	if f.inFlight > f.maxInFlight {
+		f.maxInFlight = f.inFlight
+	}
+	f.mu.Unlock()
+	if f.hold > 0 {
+		time.Sleep(f.hold)
+	}
+}
+
+func (f *trackingAT) leave() {
+	f.mu.Lock()
+	f.inFlight--
+	f.mu.Unlock()
+}
+
+func (f *trackingAT) MaxInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxInFlight
+}
+
+func (f *trackingAT) EnsureConnected() error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.EnsureConnected()
+}
+
+func (f *trackingAT) SetAPN(cid int, pdp domain.PDPType, apn string) error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.SetAPN(cid, pdp, apn)
+}
+
+func (f *trackingAT) SetRATMode(pref domain.RATModePref) error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.SetRATMode(pref)
+}
+
+func (f *trackingAT) SendRaw(cmd string) (string, error) {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.SendRaw(cmd)
+}
+
+func (f *trackingAT) GetUSBMode() (int, error) {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.GetUSBMode()
+}
+
+func (f *trackingAT) SetUSBMode(mode int) error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.SetUSBMode(mode)
+}
+
+func (f *trackingAT) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error) {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.GetFullStatus()
+}
+
+func (f *trackingAT) Close() error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.Close()
+}
+
+func (f *trackingAT) SetPortName(n string) {
+	f.enter()
+	defer f.leave()
+	f.fakeAT.SetPortName(n)
+}
+
+func TestATGateSerializesControlAndPoll(t *testing.T) {
+	at := &trackingAT{
+		fakeAT: fakeAT{
+			port: "/dev/ttyUSB0",
+			sig:  domain.SignalInfo{RSSI: -70, Percentage: 55},
+		},
+		hold: 5 * time.Millisecond,
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:  at,
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			_ = svc.Status()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = svc.SetAPN(domain.APNConfig{APN: "internet", PDPType: domain.PDPIPV4V6})
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = svc.RawAT("AT")
+		}()
+	}
+	wg.Wait()
+
+	if max := at.MaxInFlight(); max != 1 {
+		t.Fatalf("AT gate failed: max concurrent AT ops = %d (want 1)", max)
+	}
+}
+
+func TestATGateSerializesUSBModeAndPoll(t *testing.T) {
+	at := &trackingAT{
+		fakeAT: fakeAT{
+			port: "/dev/ttyUSB0",
+			sig:  domain.SignalInfo{RSSI: -65, Percentage: 60},
+		},
+		hold: 3 * time.Millisecond,
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB:      &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:       at,
+		Discover: &fakeDiscover{port: "/dev/ttyUSB0"},
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = svc.Status()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = svc.USBMode()
+		}()
+	}
+	wg.Wait()
+
+	if max := at.MaxInFlight(); max != 1 {
+		t.Fatalf("AT gate failed on USBMode+poll: max concurrent = %d (want 1)", max)
+	}
+}
+
+func TestSelectModemPortSwitchUsesATGate(t *testing.T) {
+	at := &trackingAT{
+		fakeAT: fakeAT{port: "/dev/ttyUSB0"},
+		hold:   2 * time.Millisecond,
+	}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT:  at,
+		Inventory: InventoryFuncs{
+			ListModemsFn: func(_, _, _ string) []domain.ModemDevice {
+				return []domain.ModemDevice{{
+					ID:   "serial:/dev/ttyUSB1",
+					Name: "Serial",
+					ATPorts: []domain.ModemInterface{{
+						Path: "/dev/ttyUSB1", Kind: domain.IfaceKindAT, ATReady: true, Label: "/dev/ttyUSB1",
+					}},
+				}}
+			},
+		},
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			_ = svc.Status()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := svc.SelectModem(domain.ModemSelectRequest{ATPort: "/dev/ttyUSB1"})
+		if err != nil {
+			t.Errorf("SelectModem: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	if max := at.MaxInFlight(); max != 1 {
+		t.Fatalf("port switch raced with poll: max concurrent = %d", max)
+	}
+	if at.port != "/dev/ttyUSB1" {
+		t.Fatalf("port not switched: %s", at.port)
 	}
 }
