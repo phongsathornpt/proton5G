@@ -2,7 +2,7 @@
 
 Lightweight **Linux** Go daemon + embedded WebUI for the **Fibocom FM350-GL** 5G USB modem (`0e8d:7127`).
 
-It keeps USB power stable (autosuspend / `power/control`), talks **AT** over serial, exposes a live dashboard (SSE), and can bring up a **data path** when the modem presents RNDIS (network iface) or MBIM (`/dev/cdc-wdm*`).
+It keeps USB power stable (autosuspend / `power/control`), talks **AT** over serial, exposes a live dashboard (SSE), can bring up a **data path** when the modem presents RNDIS (network iface) or MBIM (`/dev/cdc-wdm*`), and can share that LTE uplink as a **WiFi hotspot** (hostapd + NAT).
 
 | | |
 |---|---|
@@ -21,6 +21,7 @@ It keeps USB power stable (autosuspend / `power/control`), talks **AT** over ser
 - **Data bearer**
   - **RNDIS** (common on FM350 USB): `ip link up` + DHCP
   - **MBIM** (if present): optional `mbimcli`
+- **WiFi hotspot** — host WiFi AP (hostapd) + DHCP (dnsmasq) + NAT to LTE/RNDIS uplink
 - **Signal history** — in-memory ring buffer + optional JSON file
 - **Single binary** — vanilla HTML/CSS/JS via `go:embed` (no Node build)
 - **Auto-elevate** — re-exec with `sudo` when not root (`-no-elevate` to skip)
@@ -230,9 +231,14 @@ Details: [`docs/architecture.md`](docs/architecture.md), [`docs/at-command-guide
 | POST | `/api/reset` | USB hard reset |
 | POST | `/api/data/connect` | RNDIS DHCP or MBIM connect |
 | POST | `/api/data/disconnect` | Tear down data path |
+| GET | `/api/hotspot` | Hotspot status + tools + WiFi devices |
+| POST | `/api/hotspot/start` | Start WPA2 AP + NAT to RNDIS uplink |
+| POST | `/api/hotspot/stop` | Stop AP / tear down NAT |
 | GET/POST | `/api/usbmode` | Query / set `AT+GTUSBMODE` |
 | GET | `/api/history` | Signal samples |
 | GET | `/api/mbim` | MBIM helper status |
+
+Hotspot ops guide: [`docs/wifi-hotspot.md`](docs/wifi-hotspot.md) (packages: `hostapd` `dnsmasq` `iw` `iproute2` `nftables`|`iptables`).
 
 ---
 

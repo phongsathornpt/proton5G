@@ -56,6 +56,15 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] Optional SSE broadcast hub (`SSEHub`: one marshal + fan-out; `Server.Run` from main)
 - [x] Optional AT work queue for control cmds (`withAT` mutex gate; no async job API)
 
+## WiFi hotspot (LTE uplink + AP)
+- [x] Domain `HotspotConfig` / status / validation
+- [x] Repository: `iw` discovery, hostapd+dnsmasq conf, NAT (nft/iptables), supervised processes
+- [x] Usecase `HotspotStart/Stop/Status` (uplink = selected RNDIS)
+- [x] API + WebUI card
+- [x] Docs `docs/wifi-hotspot.md`, systemd RuntimeDirectory
+- [ ] Config persistence to StateDirectory
+- [ ] Associated client list (iw station dump + dnsmasq leases)
+
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)
 - [ ] **True MBIM composition**: only if a firmware mode document lists a non-RNDIS profile for this SKU

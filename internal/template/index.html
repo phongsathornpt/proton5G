@@ -119,6 +119,40 @@
             <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM (<code>/dev/cdc-wdm*</code>). Apply APN via AT first, then Connect.</p>
         </section>
 
+        <!-- WiFi Hotspot (LTE uplink + AP) -->
+        <section class="card">
+            <h2>WiFi Hotspot</h2>
+            <div class="info-list">
+                <div class="info-item"><span>State:</span> <strong id="hotspot-state">-</strong></div>
+                <div class="info-item"><span>Uplink:</span> <strong id="hotspot-uplink">-</strong></div>
+                <div class="info-item"><span>LAN:</span> <strong id="hotspot-lan">-</strong></div>
+                <div class="info-item"><span>Tools:</span> <strong id="hotspot-tools">-</strong></div>
+            </div>
+            <div class="form-group mt-15">
+                <label for="hotspot-wlan">WiFi interface</label>
+                <select id="hotspot-wlan"></select>
+            </div>
+            <div class="form-group">
+                <label for="hotspot-ssid">SSID</label>
+                <input type="text" id="hotspot-ssid" maxlength="32" placeholder="FM350-Hotspot" />
+            </div>
+            <div class="form-group">
+                <label for="hotspot-password">Password (WPA2, 8+ chars)</label>
+                <input type="password" id="hotspot-password" minlength="8" placeholder="••••••••" autocomplete="new-password" />
+            </div>
+            <div class="form-group">
+                <label for="hotspot-channel">Channel (2.4 GHz)</label>
+                <input type="number" id="hotspot-channel" min="1" max="14" value="6" />
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" onclick="hotspotStart()">Start hotspot</button>
+                <button type="button" onclick="hotspotStop()">Stop</button>
+                <button type="button" onclick="hotspotSaveConfig()">Save config</button>
+                <button type="button" onclick="refreshHotspot()">Refresh</button>
+            </div>
+            <p class="hint" id="hotspot-hint">Connect <strong>Data Bearer</strong> (LTE/RNDIS) first, then start the hotspot. Clients get DHCP on 192.168.50.0/24 and share the modem uplink (NAT). Needs hostapd, dnsmasq, iw, and nft/iptables. Mark wlan unmanaged in NetworkManager if hostapd fails.</p>
+        </section>
+
         <!-- USB composition (GTUSBMODE) -->
         <section class="card">
             <h2>USB Composition</h2>

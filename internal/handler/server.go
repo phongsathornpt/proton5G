@@ -31,6 +31,11 @@ type ModemUsecase interface {
 	DataDisconnect(req domain.DataConnectRequest) (string, error)
 	USBMode() domain.USBModeInfo
 	SetUSBMode(mode int) (domain.USBModeInfo, error)
+	HotspotStatus() domain.HotspotStatus
+	HotspotSetConfig(cfg domain.HotspotConfig) error
+	HotspotStart(req domain.HotspotStartRequest) (domain.HotspotStatus, error)
+	HotspotStop() (domain.HotspotStatus, error)
+	ListWiFi() []domain.WiFiDevice
 }
 
 // Server is the HTTP/SSE adapter.
@@ -78,6 +83,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/data/disconnect", s.handleDataDisconnect)
 	mux.HandleFunc("GET /api/usbmode", s.handleGetUSBMode)
 	mux.HandleFunc("POST /api/usbmode", s.handleSetUSBMode)
+	mux.HandleFunc("GET /api/hotspot", s.handleHotspotStatus)
+	mux.HandleFunc("GET /api/hotspot/wifi", s.handleHotspotWiFi)
+	mux.HandleFunc("POST /api/hotspot/config", s.handleHotspotConfig)
+	mux.HandleFunc("POST /api/hotspot/start", s.handleHotspotStart)
+	mux.HandleFunc("POST /api/hotspot/stop", s.handleHotspotStop)
 
 	var h http.Handler = mux
 	if s.token != "" {
@@ -325,6 +335,55 @@ func (s *Server) handleSetUSBMode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "usb_mode": info})
+}
+
+func (s *Server) handleHotspotStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.svc.HotspotStatus())
+}
+
+func (s *Server) handleHotspotWiFi(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"devices": s.svc.ListWiFi()})
+}
+
+func (s *Server) handleHotspotConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg domain.HotspotConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.svc.HotspotSetConfig(cfg); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleHotspotStart(w http.ResponseWriter, r *http.Request) {
+	var req domain.HotspotStartRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	st, err := s.svc.HotspotStart(req)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "hotspot": st})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(st)
+}
+
+func (s *Server) handleHotspotStop(w http.ResponseWriter, r *http.Request) {
+	st, err := s.svc.HotspotStop()
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "hotspot": st})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(st)
 }
 
 func writeUsecaseError(w http.ResponseWriter, err error) {

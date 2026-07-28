@@ -29,6 +29,7 @@ cmd/app/main.go  --> flags, wiring, lifecycle
    - **History**: in-memory ring buffer + optional JSON file.
    - **MBIM**: optional `mbimcli` helper.
    - **Net**: RNDIS path via `ip link` + `dhclient`/`dhcpcd`; `ip -4 addr` for labels.
+   - **Hotspot**: host WiFi AP via `hostapd` + `dnsmasq` + nft/iptables NAT; `iw` discovery.
 
 2. **Usecase (`internal/usecase`)**
    - **Background `RunStatusPoller`** (one goroutine) owns AT/USB sampling and recovery; writes a cache.
@@ -37,6 +38,7 @@ cmd/app/main.go  --> flags, wiring, lifecycle
    - Inventory selection: modem / AT port / RNDIS iface / MBIM device.
    - Control: APN, RAT, raw AT, USB reset, USB composition (`GTUSBMODE`).
    - Data: unified `DataConnect` / `DataDisconnect` (RNDIS or MBIM); legacy MBIM methods remain.
+   - **Hotspot**: `HotspotStart/Stop/Status` — WiFi AP NATed to RNDIS uplink (not under `atMu`).
    - Background `RunWatchdog` enforces USB presence/power without a browser open.
 
 ### Concurrency model
@@ -50,11 +52,21 @@ main
   └─ go http.Server
         ├─ GET /api/events × N  → subscribe to hub (no AT)
         ├─ GET /api/status → cache (or Status if ?fresh=1)
-        └─ POST control → atMu → AT (same exclusive section as poller)
+        ├─ POST control → atMu → AT (same exclusive section as poller)
+        └─ POST /api/hotspot/* → hotspotMu → hostapd/dnsmasq/NAT (not AT)
 ```
+
+### Cellular router path
+
+```
+Client ──WiFi──► wlan (hostapd) ──dnsmasq DHCP──► NAT ──► RNDIS enx… (FM350 LTE) ──► Internet
+```
+
+See [`docs/wifi-hotspot.md`](wifi-hotspot.md).
 
 - **SSE hub** (`internal/handler/sse_hub.go`): one ticker marshals `CachedStatus()` and non-blocking-sends to subscriber channels; slow clients drop frames. Wire format unchanged (`data: <FullStatus JSON>`).
 - **AT work queue (`atMu` / `withAT`)**: single exclusive section for manager-port AT work — status poll, recovery/rediscover, control (`SetAPN`/`SetRAT`/`RawAT`/`USBMode`/`SetUSBMode`), and port lifecycle (`Close`/`SetPortName` on select/reset). FIFO via mutex waiters; HTTP still blocks until the job finishes. Prevents control from interleaving mid-`GetFullStatus` or racing rediscover.
+- **Hotspot (`hotspotMu`)**: independent of AT; start requires uplink IPv4 on selected RNDIS iface.
 - Lock order: **`atMu` → short `s.mu` only** (never `s.mu` then `atMu`). `ModemService.mu` is not held across AT I/O.
 - `at.Client` still mutexes each serial write/read; usecase `atMu` is the multi-command / lifecycle gate.
 - **Inventory / discover**: `ProbeATPortsCached` probes distinct `ttyUSB*` in parallel (bounded, default 6), with a 15s TTL cache; skips the manager’s open AT port. Rediscover runs only under `atMu` after `Close`.
@@ -66,6 +78,7 @@ main
      - Inventory: `/api/modems`, `/api/modems/select`
      - Control: `/api/apn`, `/api/rat`, `/api/raw`, `/api/reset`
      - Data: `/api/data/connect`, `/api/data/disconnect`
+     - Hotspot: `/api/hotspot`, `/api/hotspot/wifi`, `/api/hotspot/config|start|stop`
      - USB composition: `/api/usbmode` (GET/POST, `AT+GTUSBMODE`)
      - MBIM (legacy): `/api/mbim`, `/api/mbim/connect`, `/api/mbim/disconnect`
    - Optional API token (`-token` / `FM350_API_TOKEN`): Bearer, `X-API-Token`, or `?token=` (SSE).
@@ -84,6 +97,8 @@ main
 | AT-only | serial only | monitoring only; no data UI targets |
 
 `DataConnect` auto mode prefers selected RNDIS iface, else selected MBIM device.
+
+**Hotspot** uses that RNDIS iface as NAT egress after DataConnect; WiFi is a separate host radio (not the FM350 USB composition).
 
 ## Packaging
 

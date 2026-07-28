@@ -59,6 +59,16 @@ type DeviceInventory interface {
 	MBIMInstallHint() string
 }
 
+// HotspotRepository manages host WiFi software AP (hostapd/dnsmasq/NAT).
+type HotspotRepository interface {
+	ListWiFiDevices() []domain.WiFiDevice
+	Tools() domain.HotspotTools
+	Start(cfg domain.HotspotConfig, uplink string) (string, error)
+	Stop() (string, error)
+	IsRunning() bool
+	StatusExtras() (lanAddrs, uplinkAddrs []string, clients []domain.HotspotClient)
+}
+
 // discoverFunc adapts a plain function to ATDiscoverer.
 type discoverFunc func(vendor, product string) (string, error)
 

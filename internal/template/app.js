@@ -68,9 +68,11 @@ function initSSE() {
     refreshHistory();
     refreshModems();
     refreshUSBMode();
+    refreshHotspot();
     setInterval(refreshHistory, 15000);
     setInterval(refreshModems, 10000);
     setInterval(refreshUSBMode, 30000);
+    setInterval(refreshHotspot, 10000);
 }
 
 function findModemById(id) {
@@ -562,6 +564,120 @@ function logConsole(msg) {
     const consoleDiv = document.getElementById('console-output');
     consoleDiv.innerText += `\n${msg}`;
     consoleDiv.scrollTop = consoleDiv.scrollHeight;
+}
+
+function refreshHotspot() {
+    return fetch(apiURL('/api/hotspot'), { headers: apiHeaders(false) })
+        .then(r => r.json())
+        .then(st => {
+            const set = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = v;
+            };
+            set('hotspot-state', st.state || '-');
+            const up = (st.uplink_iface || '-') + (st.uplink_addrs && st.uplink_addrs.length
+                ? ' (' + st.uplink_addrs.join(', ') + ')' : '');
+            set('hotspot-uplink', up);
+            set('hotspot-lan', (st.lan_addrs && st.lan_addrs.length) ? st.lan_addrs.join(', ') : (st.config && st.config.lan_cidr) || '-');
+            const t = st.tools || {};
+            const missing = [];
+            if (!t.hostapd) missing.push('hostapd');
+            if (!t.dnsmasq) missing.push('dnsmasq');
+            if (!t.iw) missing.push('iw');
+            if (!t.ip) missing.push('ip');
+            if (!t.nftables && !t.iptables) missing.push('nft|iptables');
+            set('hotspot-tools', missing.length ? 'missing: ' + missing.join(', ') : 'ok');
+
+            const sel = document.getElementById('hotspot-wlan');
+            if (sel) {
+                const cur = sel.value;
+                sel.innerHTML = '';
+                const devs = st.devices || [];
+                if (!devs.length) {
+                    const o = document.createElement('option');
+                    o.value = '';
+                    o.textContent = '(no wireless ifaces)';
+                    sel.appendChild(o);
+                } else {
+                    devs.forEach(d => {
+                        const o = document.createElement('option');
+                        o.value = d.iface;
+                        o.textContent = d.label || d.iface;
+                        o.disabled = !d.supports_ap;
+                        sel.appendChild(o);
+                    });
+                }
+                const prefer = (st.config && st.config.wlan_iface) || cur;
+                if (prefer) sel.value = prefer;
+            }
+            if (st.config) {
+                const ssid = document.getElementById('hotspot-ssid');
+                if (ssid && !ssid.dataset.dirty) ssid.value = st.config.ssid || '';
+                const ch = document.getElementById('hotspot-channel');
+                if (ch && !ch.dataset.dirty) ch.value = st.config.channel || 6;
+            }
+            const hint = document.getElementById('hotspot-hint');
+            if (hint && st.error) {
+                hint.textContent = st.error + (st.note ? ' — ' + st.note : '');
+            } else if (hint && st.note) {
+                hint.textContent = st.note;
+            }
+        })
+        .catch(e => console.error('hotspot status', e));
+}
+
+function hotspotFormBody() {
+    const body = {
+        ssid: (document.getElementById('hotspot-ssid') || {}).value || '',
+        wlan_iface: (document.getElementById('hotspot-wlan') || {}).value || '',
+        channel: parseInt((document.getElementById('hotspot-channel') || {}).value || '6', 10),
+        band: '2.4',
+        lan_cidr: '192.168.50.1/24'
+    };
+    const pass = (document.getElementById('hotspot-password') || {}).value || '';
+    if (pass) body.password = pass;
+    return body;
+}
+
+function hotspotSaveConfig() {
+    return fetch(apiURL('/api/hotspot/config'), {
+        method: 'POST',
+        headers: apiHeaders(true),
+        body: JSON.stringify(hotspotFormBody())
+    }).then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || r.statusText);
+        alert('Hotspot config saved');
+        return refreshHotspot();
+    }).catch(e => alert('Save failed: ' + e.message));
+}
+
+function hotspotStart() {
+    const body = hotspotFormBody();
+    if (!body.password) {
+        // allow start with previously saved password
+        delete body.password;
+    }
+    return fetch(apiURL('/api/hotspot/start'), {
+        method: 'POST',
+        headers: apiHeaders(true),
+        body: JSON.stringify(body)
+    }).then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || r.statusText);
+        return refreshHotspot();
+    }).catch(e => alert('Hotspot start failed: ' + e.message));
+}
+
+function hotspotStop() {
+    return fetch(apiURL('/api/hotspot/stop'), {
+        method: 'POST',
+        headers: apiHeaders(true)
+    }).then(async r => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || r.statusText);
+        return refreshHotspot();
+    }).catch(e => alert('Hotspot stop failed: ' + e.message));
 }
 
 window.addEventListener('DOMContentLoaded', initSSE);

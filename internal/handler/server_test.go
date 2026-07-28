@@ -75,6 +75,19 @@ func (s *stubService) USBMode() domain.USBModeInfo {
 func (s *stubService) SetUSBMode(mode int) (domain.USBModeInfo, error) {
 	return domain.USBModeInfo{Mode: mode, Label: domain.USBModeLabel(mode), Supported: domain.KnownUSBModes()}, nil
 }
+func (s *stubService) HotspotStatus() domain.HotspotStatus {
+	return domain.HotspotStatus{State: domain.HotspotStateStopped, Config: domain.HotspotConfig{SSID: "FM350-Hotspot"}}
+}
+func (s *stubService) HotspotSetConfig(domain.HotspotConfig) error { return nil }
+func (s *stubService) HotspotStart(domain.HotspotStartRequest) (domain.HotspotStatus, error) {
+	return domain.HotspotStatus{State: domain.HotspotStateRunning}, nil
+}
+func (s *stubService) HotspotStop() (domain.HotspotStatus, error) {
+	return domain.HotspotStatus{State: domain.HotspotStateStopped}, nil
+}
+func (s *stubService) ListWiFi() []domain.WiFiDevice {
+	return []domain.WiFiDevice{{Iface: "wlan0", SupportsAP: true, Label: "wlan0 (AP capable)"}}
+}
 
 func TestGetStatusEndpoint(t *testing.T) {
 	srv := NewServer(&stubService{status: domain.FullStatus{RATMode: domain.RATModeAuto}}, "")
@@ -399,5 +412,29 @@ func TestUSBModeEndpoint(t *testing.T) {
 	srv.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHotspotEndpoints(t *testing.T) {
+	srv := NewServer(&stubService{}, "")
+	for _, path := range []string{"/api/hotspot", "/api/hotspot/wifi"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d", path, w.Code)
+		}
+	}
+	req := httptest.NewRequest("POST", "/api/hotspot/start", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", w.Code, w.Body.String())
+	}
+	req = httptest.NewRequest("POST", "/api/hotspot/stop", nil)
+	w = httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("stop: %d", w.Code)
 	}
 }

@@ -22,3 +22,14 @@ const (
 
 // DefaultCID is the primary PDP context ID.
 const DefaultCID = 1
+
+// WiFi software AP (hotspot) defaults.
+const (
+	HotspotSSID       = "FM350-Hotspot"
+	HotspotLANCIDR    = "192.168.50.1/24"
+	HotspotDHCPStart  = "192.168.50.10"
+	HotspotDHCPEnd    = "192.168.50.200"
+	HotspotChannel    = 6
+	HotspotBand       = "2.4"
+	HotspotRuntimeDir = "/run/fm350-manager"
+)

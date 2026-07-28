@@ -21,8 +21,10 @@ RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/sys/module/usbcore/parameters /sys/bus/usb/devices /dev/bus/usb /var/lib/fm350-manager
+ReadWritePaths=/sys/module/usbcore/parameters /sys/bus/usb/devices /dev/bus/usb /var/lib/fm350-manager /run/fm350-manager
 StateDirectory=fm350-manager
+RuntimeDirectory=fm350-manager
+# Hotspot needs host tools on PATH: hostapd dnsmasq iw iproute2 nftables|iptables
 PrivateTmp=true
 
 [Install]

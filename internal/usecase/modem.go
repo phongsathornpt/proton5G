@@ -19,6 +19,7 @@ type ModemService struct {
 	history   HistoryRepository
 	mbim      MBIMRepository
 	net       NetRepository
+	hotspot   HotspotRepository
 	discover  ATDiscoverer
 	inventory DeviceInventory
 	vendor    string
@@ -26,10 +27,14 @@ type ModemService struct {
 
 	mu              sync.RWMutex
 	atMu            sync.Mutex // AT work queue: poll, control, rediscover, port lifecycle
+	hotspotMu       sync.Mutex // start/stop races (not AT)
 	status          domain.FullStatus
 	selectedModemID string
 	selectedMBIM    string
 	selectedNet     string
+	hotspotCfg      domain.HotspotConfig
+	hotspotState    string
+	hotspotErr      string
 	atFailStreak    int
 	lastResetAt     time.Time
 	lastRediscover  time.Time
@@ -45,6 +50,7 @@ type ModemServiceConfig struct {
 	History   HistoryRepository
 	MBIM      MBIMRepository
 	Net       NetRepository
+	Hotspot   HotspotRepository
 	Discover  ATDiscoverer
 	Inventory DeviceInventory
 	Vendor    string
@@ -64,6 +70,7 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 		history:         cfg.History,
 		mbim:            cfg.MBIM,
 		net:             cfg.Net,
+		hotspot:         cfg.Hotspot,
 		discover:        cfg.Discover,
 		inventory:       cfg.Inventory,
 		vendor:          cfg.Vendor,
@@ -71,6 +78,8 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 		resetCooldown:     appdefaults.ATResetCooldown,
 		rediscoverEvery: appdefaults.ATRediscoverEvery,
 		failStreakMax:   appdefaults.ATFailResetStreak,
+		hotspotCfg:      defaultHotspotConfig(),
+		hotspotState:    domain.HotspotStateStopped,
 	}
 }
 

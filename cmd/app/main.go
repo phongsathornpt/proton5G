@@ -84,12 +84,18 @@ func main() {
 		}
 	}
 
+	hotspotRuntime := appdefaults.HotspotRuntimeDir
+	if rd := strings.TrimSpace(os.Getenv("RUNTIME_DIRECTORY")); rd != "" {
+		hotspotRuntime = rd
+	}
+
 	svc := usecase.NewModemService(usecase.ModemServiceConfig{
 		USB:      usb,
 		AT:       atClient,
 		History:  hist,
 		MBIM:     repository.NewMBIM(),
 		Net:      repository.NewNetRepo(),
+		Hotspot:  repository.NewHotspotRepo(hotspotRuntime),
 		Discover: usecase.DiscoverFunc(repository.DiscoverATPort),
 		Inventory: usecase.InventoryFuncs{
 			ListModemsFn:      repository.ListModems,
@@ -163,6 +169,11 @@ func main() {
 
 	log.Println("[INFO] Shutting down FM350-GL Manager...")
 	cancel()
+
+	// Tear down WiFi hotspot (hostapd/dnsmasq/NAT) before exiting.
+	if _, err := svc.HotspotStop(); err != nil {
+		log.Printf("[WARN] Hotspot stop: %v", err)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
