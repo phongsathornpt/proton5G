@@ -19,11 +19,12 @@ type ModemService struct {
 	history   HistoryRepository
 	mbim      MBIMRepository
 	net       NetRepository
-	hotspot   HotspotRepository
-	discover  ATDiscoverer
-	inventory DeviceInventory
-	vendor    string
-	product   string
+	hotspot       HotspotRepository
+	discover      ATDiscoverer
+	inventory     DeviceInventory
+	vendor        string
+	product       string
+	hotspotFile   string // optional JSON path for HotspotConfig persistence
 
 	mu              sync.RWMutex
 	atMu            sync.Mutex // AT work queue: poll, control, rediscover, port lifecycle
@@ -45,16 +46,17 @@ type ModemService struct {
 }
 
 type ModemServiceConfig struct {
-	USB       USBRepository
-	AT        ATRepository
-	History   HistoryRepository
-	MBIM      MBIMRepository
-	Net       NetRepository
-	Hotspot   HotspotRepository
-	Discover  ATDiscoverer
-	Inventory DeviceInventory
-	Vendor    string
-	Product   string
+	USB              USBRepository
+	AT               ATRepository
+	History          HistoryRepository
+	MBIM             MBIMRepository
+	Net              NetRepository
+	Hotspot          HotspotRepository
+	Discover         ATDiscoverer
+	Inventory        DeviceInventory
+	Vendor           string
+	Product          string
+	HotspotConfigFile string // empty = no persistence
 }
 
 func NewModemService(cfg ModemServiceConfig) *ModemService {
@@ -64,7 +66,7 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 	if cfg.Product == "" {
 		cfg.Product = domain.DefaultFM350.Product
 	}
-	return &ModemService{
+	s := &ModemService{
 		usb:             cfg.USB,
 		at:              cfg.AT,
 		history:         cfg.History,
@@ -75,12 +77,14 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 		inventory:       cfg.Inventory,
 		vendor:          cfg.Vendor,
 		product:         cfg.Product,
+		hotspotFile:     cfg.HotspotConfigFile,
 		resetCooldown:     appdefaults.ATResetCooldown,
 		rediscoverEvery: appdefaults.ATRediscoverEvery,
 		failStreakMax:   appdefaults.ATFailResetStreak,
 		hotspotCfg:      defaultHotspotConfig(),
 		hotspotState:    domain.HotspotStateStopped,
 	}
+	return s
 }
 
 // Status forces a USB+AT poll (recovery policy, history sample). Used by tests and ?fresh=1.

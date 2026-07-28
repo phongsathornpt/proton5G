@@ -70,7 +70,23 @@ API:
 | POST | `/api/hotspot/start` |
 | POST | `/api/hotspot/stop` |
 
-Runtime files: `$RUNTIME_DIRECTORY` or `/run/fm350-manager/` (`hostapd.conf`, `dnsmasq.conf`, mode `0600`).
+Runtime files: `$RUNTIME_DIRECTORY` or `/run/fm350-manager/` (`hostapd.conf`, `dnsmasq.conf`, `dnsmasq.leases`, mode `0600`).
+
+### Config persistence
+
+SSID, password, wlan, channel, and `enabled` are saved to:
+
+- `$STATE_DIRECTORY/hotspot.json` under systemd, or
+- `/var/lib/fm350-manager/hotspot.json` by default  
+
+File mode `0600` (contains WPA passphrase). Loaded on process start; written on **Save config**, successful **Start**, and **Stop**.
+
+### Associated clients
+
+While the hotspot is running, `GET /api/hotspot` includes `clients[]` merged from:
+
+- `iw dev <wlan> station dump` (associated stations)
+- dnsmasq lease file (IP + hostname)
 
 ## Teardown
 

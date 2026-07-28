@@ -46,7 +46,8 @@ func (h *HotspotManager) IsRunning() bool {
 // StatusExtras returns current LAN/uplink addresses and best-effort clients.
 func (h *HotspotManager) StatusExtras() (lanAddrs, uplinkAddrs []string, clients []domain.HotspotClient) {
 	h.mu.Lock()
-	wlan, uplink := h.wlan, h.uplink
+	wlan, uplink, runtimeDir := h.wlan, h.uplink, h.runtimeDir
+	running := h.running
 	h.mu.Unlock()
 	if wlan != "" {
 		lanAddrs = NetIfaceAddrs(wlan)
@@ -54,7 +55,11 @@ func (h *HotspotManager) StatusExtras() (lanAddrs, uplinkAddrs []string, clients
 	if uplink != "" {
 		uplinkAddrs = NetIfaceAddrs(uplink)
 	}
-	return lanAddrs, uplinkAddrs, nil
+	if running && wlan != "" {
+		leaseFile := filepath.Join(runtimeDir, "dnsmasq.leases")
+		clients = ListHotspotClients(wlan, leaseFile)
+	}
+	return lanAddrs, uplinkAddrs, clients
 }
 
 // Start brings up the AP stack. On failure it attempts cleanup.
@@ -119,11 +124,12 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 
 	hostapdPath := filepath.Join(h.runtimeDir, "hostapd.conf")
 	dnsmasqPath := filepath.Join(h.runtimeDir, "dnsmasq.conf")
+	leasePath := filepath.Join(h.runtimeDir, "dnsmasq.leases")
 	hostapdConf := GenerateHostapdConf(cfg)
 	if err := os.WriteFile(hostapdPath, []byte(hostapdConf), 0o600); err != nil {
 		return strings.Join(logParts, "\n"), err
 	}
-	dnsConf, err := GenerateDnsmasqConf(cfg, appdefaults.HotspotDHCPStart, appdefaults.HotspotDHCPEnd)
+	dnsConf, err := GenerateDnsmasqConf(cfg, appdefaults.HotspotDHCPStart, appdefaults.HotspotDHCPEnd, leasePath)
 	if err != nil {
 		return strings.Join(logParts, "\n"), err
 	}

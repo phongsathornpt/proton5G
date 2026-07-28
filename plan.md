@@ -62,8 +62,8 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] Usecase `HotspotStart/Stop/Status` (uplink = selected RNDIS)
 - [x] API + WebUI card
 - [x] Docs `docs/wifi-hotspot.md`, systemd RuntimeDirectory
-- [ ] Config persistence to StateDirectory
-- [ ] Associated client list (iw station dump + dnsmasq leases)
+- [x] Config persistence to StateDirectory (`hotspot.json`, mode 0600)
+- [x] Associated client list (iw station dump + dnsmasq leases)
 
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)

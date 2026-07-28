@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -88,15 +89,20 @@ func main() {
 	if rd := strings.TrimSpace(os.Getenv("RUNTIME_DIRECTORY")); rd != "" {
 		hotspotRuntime = rd
 	}
+	hotspotConfigPath := appdefaults.HotspotConfigFile
+	if sd := strings.TrimSpace(os.Getenv("STATE_DIRECTORY")); sd != "" {
+		hotspotConfigPath = filepath.Join(sd, "hotspot.json")
+	}
 
 	svc := usecase.NewModemService(usecase.ModemServiceConfig{
-		USB:      usb,
-		AT:       atClient,
-		History:  hist,
-		MBIM:     repository.NewMBIM(),
-		Net:      repository.NewNetRepo(),
-		Hotspot:  repository.NewHotspotRepo(hotspotRuntime),
-		Discover: usecase.DiscoverFunc(repository.DiscoverATPort),
+		USB:               usb,
+		AT:                atClient,
+		History:           hist,
+		MBIM:              repository.NewMBIM(),
+		Net:               repository.NewNetRepo(),
+		Hotspot:           repository.NewHotspotRepo(hotspotRuntime),
+		HotspotConfigFile: hotspotConfigPath,
+		Discover:          usecase.DiscoverFunc(repository.DiscoverATPort),
 		Inventory: usecase.InventoryFuncs{
 			ListModemsFn:      repository.ListModems,
 			ListMBIMFn:        repository.ListMBIMDevices,
@@ -106,6 +112,9 @@ func main() {
 		Vendor:  domain.DefaultFM350.Vendor,
 		Product: domain.DefaultFM350.Product,
 	})
+	if err := svc.LoadHotspotConfigFile(); err != nil {
+		log.Printf("[WARN] Load hotspot config: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

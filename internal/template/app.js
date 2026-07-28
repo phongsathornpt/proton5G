@@ -587,6 +587,15 @@ function refreshHotspot() {
             if (!t.ip) missing.push('ip');
             if (!t.nftables && !t.iptables) missing.push('nft|iptables');
             set('hotspot-tools', missing.length ? 'missing: ' + missing.join(', ') : 'ok');
+            const clients = st.clients || [];
+            if (!clients.length) {
+                set('hotspot-clients', st.state === 'running' ? '(none associated)' : '-');
+            } else {
+                set('hotspot-clients', clients.map(c => {
+                    const parts = [c.mac || '?', c.ip, c.name].filter(Boolean);
+                    return parts.join(' ');
+                }).join('; '));
+            }
 
             const sel = document.getElementById('hotspot-wlan');
             if (sel) {

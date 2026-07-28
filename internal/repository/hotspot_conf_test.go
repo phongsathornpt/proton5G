@@ -46,7 +46,7 @@ func TestGenerateDnsmasqConf(t *testing.T) {
 	out, err := GenerateDnsmasqConf(domain.HotspotConfig{
 		WlanIface: "wlan0",
 		LANCIDR:   "192.168.50.1/24",
-	}, "192.168.50.10", "192.168.50.200")
+	}, "192.168.50.10", "192.168.50.200", "/run/fm350-manager/dnsmasq.leases")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,7 @@ func TestGenerateDnsmasqConf(t *testing.T) {
 		"dhcp-range=192.168.50.10,192.168.50.200,12h",
 		"dhcp-option=3,192.168.50.1",
 		"dhcp-option=6,192.168.50.1",
+		"dhcp-leasefile=/run/fm350-manager/dnsmasq.leases",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)

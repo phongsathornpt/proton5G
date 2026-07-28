@@ -41,7 +41,8 @@ func GenerateHostapdConf(cfg domain.HotspotConfig) string {
 }
 
 // GenerateDnsmasqConf builds a bind-interfaces DHCP config for the AP LAN.
-func GenerateDnsmasqConf(cfg domain.HotspotConfig, dhcpStart, dhcpEnd string) (string, error) {
+// leaseFile, if non-empty, is written as dhcp-leasefile= for client listing.
+func GenerateDnsmasqConf(cfg domain.HotspotConfig, dhcpStart, dhcpEnd, leaseFile string) (string, error) {
 	ip, ipNet, err := net.ParseCIDR(cfg.LANCIDR)
 	if err != nil {
 		return "", err
@@ -62,6 +63,9 @@ func GenerateDnsmasqConf(cfg domain.HotspotConfig, dhcpStart, dhcpEnd string) (s
 	fmt.Fprintf(&b, "dhcp-range=%s,%s,12h\n", dhcpStart, dhcpEnd)
 	fmt.Fprintf(&b, "dhcp-option=3,%s\n", gw)
 	fmt.Fprintf(&b, "dhcp-option=6,%s\n", gw)
+	if leaseFile != "" {
+		fmt.Fprintf(&b, "dhcp-leasefile=%s\n", leaseFile)
+	}
 	b.WriteString("log-dhcp\n")
 	return b.String(), nil
 }

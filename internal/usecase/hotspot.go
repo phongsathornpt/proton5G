@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"fm350-monitor/internal/pkg/appdefaults"
@@ -72,9 +73,53 @@ func (s *ModemService) HotspotStatus() domain.HotspotStatus {
 	return st
 }
 
-// HotspotSetConfig stores validated hotspot settings (in memory).
+// LoadHotspotConfigFile loads persisted config if HotspotConfigFile is set.
+// Missing file is fine. Call once from main after NewModemService.
+func (s *ModemService) LoadHotspotConfigFile() error {
+	if s.hotspotFile == "" {
+		return nil
+	}
+	cfg, err := loadHotspotConfigFile(s.hotspotFile)
+	if err != nil {
+		return err
+	}
+	if cfg.SSID == "" && cfg.Password == "" && cfg.WlanIface == "" {
+		return nil
+	}
+	// Merge onto defaults so empty band/channel get filled.
+	merged := mergeHotspotConfig(defaultHotspotConfig(), cfg)
+	if merged.LANCIDR == "" {
+		merged.LANCIDR = appdefaults.HotspotLANCIDR
+	}
+	if merged.Band == "" {
+		merged.Band = appdefaults.HotspotBand
+	}
+	if merged.Channel <= 0 {
+		merged.Channel = appdefaults.HotspotChannel
+	}
+	s.hotspotMu.Lock()
+	s.hotspotCfg = merged
+	s.hotspotMu.Unlock()
+	log.Printf("[INFO] Loaded hotspot config from %s (ssid=%q wlan=%s)", s.hotspotFile, merged.SSID, merged.WlanIface)
+	return nil
+}
+
+func (s *ModemService) persistHotspotConfigLocked() {
+	if s.hotspotFile == "" {
+		return
+	}
+	if err := saveHotspotConfigFile(s.hotspotFile, s.hotspotCfg); err != nil {
+		log.Printf("[WARN] Save hotspot config: %v", err)
+	}
+}
+
+// HotspotSetConfig stores validated hotspot settings and persists when configured.
 func (s *ModemService) HotspotSetConfig(cfg domain.HotspotConfig) error {
-	cfg = mergeHotspotConfig(s.hotspotCfg, cfg)
+	s.hotspotMu.Lock()
+	base := s.hotspotCfg
+	s.hotspotMu.Unlock()
+
+	cfg = mergeHotspotConfig(base, cfg)
 	// Allow saving incomplete password only if not starting — still require SSID/iface when set.
 	if strings.TrimSpace(cfg.SSID) == "" {
 		return fmt.Errorf("ssid is required")
@@ -117,6 +162,7 @@ func (s *ModemService) HotspotSetConfig(cfg domain.HotspotConfig) error {
 		}
 	}
 	s.hotspotCfg = cfg
+	s.persistHotspotConfigLocked()
 	s.hotspotMu.Unlock()
 	return nil
 }
@@ -228,6 +274,7 @@ func (s *ModemService) HotspotStart(req domain.HotspotStartRequest) (domain.Hots
 		s.hotspotState = domain.HotspotStateRunning
 		s.hotspotErr = ""
 		s.hotspotCfg.Enabled = true
+		s.persistHotspotConfigLocked()
 	}
 	s.hotspotMu.Unlock()
 
@@ -254,6 +301,7 @@ func (s *ModemService) HotspotStop() (domain.HotspotStatus, error) {
 		s.hotspotState = domain.HotspotStateStopped
 		s.hotspotErr = ""
 		s.hotspotCfg.Enabled = false
+		s.persistHotspotConfigLocked()
 	}
 	s.hotspotMu.Unlock()
 	return s.HotspotStatus(), err

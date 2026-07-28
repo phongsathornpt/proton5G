@@ -32,4 +32,6 @@ const (
 	HotspotChannel    = 6
 	HotspotBand       = "2.4"
 	HotspotRuntimeDir = "/run/fm350-manager"
+	// HotspotConfigFile is the default JSON path under systemd StateDirectory.
+	HotspotConfigFile = "/var/lib/fm350-manager/hotspot.json"
 )
