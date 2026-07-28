@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -64,8 +65,18 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	fileServer := http.FileServer(http.FS(template.Files))
-	mux.Handle("GET /", fileServer)
+	// Feature-based UI: composed HTML index + static assets under /assets/
+	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /index.html", s.handleIndex)
+	assetFS, err := fs.Sub(template.Assets, "assets")
+	if err != nil {
+		// Should not happen if embed is correct; fall back to empty handler.
+		mux.HandleFunc("GET /assets/", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "assets unavailable", http.StatusInternalServerError)
+		})
+	} else {
+		mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assetFS))))
+	}
 
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -335,6 +346,16 @@ func (s *Server) handleSetUSBMode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "usb_mode": info})
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	html, err := template.RenderIndex()
+	if err != nil {
+		http.Error(w, "UI render error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(html)
 }
 
 func (s *Server) handleHotspotStatus(w http.ResponseWriter, r *http.Request) {

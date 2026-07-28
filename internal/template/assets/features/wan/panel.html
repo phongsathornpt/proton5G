@@ -1,0 +1,44 @@
+{{define "panel-wan"}}
+<section id="panel-wan" class="panel" data-panel="wan" hidden>
+    <div class="grid">
+        <section class="card">
+            <h2>APN</h2>
+            <form id="apn-form" onsubmit="updateAPN(event)">
+                <div class="form-group">
+                    <label for="apn-type">PDP type</label>
+                    <select id="apn-type">
+                        <option value="IPV4V6">IPV4V6</option>
+                        <option value="IP">IP (IPv4)</option>
+                        <option value="IPV6">IPv6</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="apn-name">APN name</label>
+                    <input type="text" id="apn-name" placeholder="e.g. internet" required>
+                </div>
+                <button type="submit" class="btn-primary">Apply APN</button>
+            </form>
+            <p class="hint">Apply APN over AT before connecting the data path when required by the carrier.</p>
+        </section>
+        <section class="card">
+            <h2>Data bearer (WAN)</h2>
+            <div class="info-list">
+                <div class="info-item"><span>Mode:</span> <strong id="data-mode">-</strong></div>
+                <div class="info-item"><span>mbimcli:</span> <strong id="mbim-cli">-</strong></div>
+                <div class="info-item"><span>Session:</span> <strong id="data-status">-</strong></div>
+                <div class="info-item"><span>WAN IP:</span> <strong id="wan-ip">-</strong></div>
+            </div>
+            <div class="form-group mt-15">
+                <label for="data-iface-select">Data interface</label>
+                <select id="data-iface-select"></select>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" id="data-connect-btn" onclick="dataConnect()">Connect</button>
+                <button type="button" onclick="dataDisconnect()">Disconnect</button>
+                <button type="button" onclick="refreshModems()">Refresh</button>
+            </div>
+            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM. Connect here first, then start the WiFi hotspot under LAN.</p>
+        </section>
+    </div>
+</section>
+{{end}}

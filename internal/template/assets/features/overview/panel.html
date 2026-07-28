@@ -1,0 +1,42 @@
+{{define "panel-overview"}}
+<section id="panel-overview" class="panel active" data-panel="overview">
+    <div class="grid">
+        <section class="card full-width">
+            <h2>System status</h2>
+            <div class="chip-row" id="overview-chips">
+                <span class="chip" id="ov-chip-at">AT: —</span>
+                <span class="chip" id="ov-chip-sim">SIM: —</span>
+                <span class="chip" id="ov-chip-reg">Reg: —</span>
+                <span class="chip" id="ov-chip-wan">WAN: —</span>
+                <span class="chip" id="ov-chip-ap">AP: —</span>
+            </div>
+            <div class="signal-meter mt-15">
+                <div class="bar-container">
+                    <div id="ov-signal-fill" class="fill" style="width: 0%;"></div>
+                </div>
+                <span id="ov-signal-pct" class="pct">0%</span>
+            </div>
+            <div class="info-list">
+                <div class="info-item"><span>Operator / tech:</span> <strong id="ov-net">-</strong></div>
+                <div class="info-item"><span>Last poll:</span> <strong id="ov-updated">-</strong></div>
+                <div class="info-item"><span>WAN IP / iface:</span> <strong id="ov-wan-detail">-</strong></div>
+                <div class="info-item"><span>Hotspot:</span> <strong id="ov-ap-detail">-</strong></div>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" onclick="dataConnect()">Connect WAN</button>
+                <button type="button" onclick="dataDisconnect()">Disconnect WAN</button>
+                <button type="button" class="btn-primary" onclick="hotspotStart()">Start hotspot</button>
+                <button type="button" onclick="hotspotStop()">Stop hotspot</button>
+                <button type="button" onclick="showPanel('wan')">WAN settings</button>
+                <button type="button" onclick="showPanel('lan')">LAN settings</button>
+            </div>
+            <p class="hint">Typical path: Cellular (modem) → WAN (APN + connect) → LAN (WiFi hotspot). LTE is the internet uplink; WiFi shares it via NAT.</p>
+        </section>
+        <section class="card full-width">
+            <h2>Signal history</h2>
+            <canvas id="signal-chart" width="900" height="140" aria-label="Signal percentage history"></canvas>
+            <p class="hint">Signal quality % (newest on the right). Updated from status polls / SSE.</p>
+        </section>
+    </div>
+</section>
+{{end}}

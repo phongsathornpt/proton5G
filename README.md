@@ -22,6 +22,7 @@ It keeps USB power stable (autosuspend / `power/control`), talks **AT** over ser
   - **RNDIS** (common on FM350 USB): `ip link up` + DHCP
   - **MBIM** (if present): optional `mbimcli`
 - **WiFi hotspot** — host WiFi AP (hostapd) + DHCP (dnsmasq) + NAT to LTE/RNDIS uplink
+- **Router-style WebUI** — Overview / Cellular / WAN / LAN / Advanced panels
 - **Signal history** — in-memory ring buffer + optional JSON file
 - **Single binary** — vanilla HTML/CSS/JS via `go:embed` (no Node build)
 - **Auto-elevate** — re-exec with `sudo` when not root (`-no-elevate` to skip)

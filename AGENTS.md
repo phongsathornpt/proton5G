@@ -12,7 +12,7 @@ This repository contains a Go daemon and WebUI (`fm350-monitor`) designed to man
    - `internal/repository/`: Sysfs USB, serial AT, history persistence, mbimcli; AT cmds/paths in `at_cmd.go` / `paths.go`.
    - `internal/usecase/`: Application workflows & recovery policy.
    - `internal/handler/`: HTTP handlers, SSE, routing (no direct serial/sysfs).
-   - `internal/template/`: Embedded vanilla HTML/CSS/JS (`go:embed`).
+   - `internal/template/`: Feature-based WebUI (`assets/layout` + `assets/features` + `assets/shared`); `go:embed` + `html/template` render.
    - `deploy/`: Systemd unit and packaging helpers.
    - `docs/`: Technical documentation and AT command reference.
 3. **No magic strings for closed sets**: Use domain enums (`RATMode`, `RATModePref`, `RegState`, …). Wire protocol literals only in repository const files. JSON values must stay stable for the WebUI.

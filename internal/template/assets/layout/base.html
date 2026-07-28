@@ -1,0 +1,33 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{if .Title}}{{.Title}}{{else}}FM350 Manager{{end}}</title>
+    <link rel="stylesheet" href="/assets/shared/tokens.css">
+    <link rel="stylesheet" href="/assets/shared/components.css">
+    <link rel="stylesheet" href="/assets/layout/layout.css">
+    <link rel="stylesheet" href="/assets/features/overview/overview.css">
+    <link rel="stylesheet" href="/assets/features/cellular/cellular.css">
+    <link rel="stylesheet" href="/assets/features/wan/wan.css">
+    <link rel="stylesheet" href="/assets/features/lan/lan.css">
+    <link rel="stylesheet" href="/assets/features/advanced/advanced.css">
+</head>
+<body>
+    <div class="layout-base">
+        <header class="layout-topbar">{{template "topbar" .}}</header>
+        <aside class="layout-sidebar" aria-label="Main">{{template "sidebar" .}}</aside>
+        <main class="layout-content">{{template "content" .}}</main>
+        <footer class="layout-footer">{{template "footer" .}}</footer>
+    </div>
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+    <script src="/assets/shared/api.js"></script>
+    <script src="/assets/shared/utils.js"></script>
+    <script src="/assets/layout/layout.js"></script>
+    <script src="/assets/app.js"></script>
+    <script src="/assets/boot.js"></script>
+</body>
+</html>
+{{end}}

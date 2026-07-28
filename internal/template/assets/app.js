@@ -1,8 +1,11 @@
 let evtSource = null;
 let historyPoints = [];
 let modemInventory = null;
+let lastStatus = null;
+let lastHotspot = null;
+let dataSessionNote = '—';
+let sseReconnectShown = false;
 
-// Optional API token: ?token=… or localStorage fm350_token (for -token / FM350_API_TOKEN).
 const API_TOKEN = (function () {
     try {
         const q = new URLSearchParams(location.search).get('token');
@@ -29,14 +32,80 @@ function apiURL(path) {
     return path + sep + 'token=' + encodeURIComponent(API_TOKEN);
 }
 
+function toast(msg, kind) {
+    const region = document.getElementById('toast-region');
+    if (!region) {
+        console.log(msg);
+        return;
+    }
+    const el = document.createElement('div');
+    el.className = 'toast' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '');
+    el.textContent = msg;
+    region.appendChild(el);
+    setTimeout(() => {
+        el.remove();
+    }, 4200);
+}
+
+async function withBusy(btn, fn) {
+    if (btn) btn.disabled = true;
+    try {
+        return await fn();
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function setText(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = v == null || v === '' ? '-' : String(v);
+}
+
+function setDot(id, state) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'dot ' + (state || 'disconnected');
+}
+
+function setChip(id, text, kind) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'chip' + (kind ? ' ' + kind : '');
+}
+
+/* Panel navigation lives in layout/layout.js (showPanel / initLayout). */
+
+function markDirty(el) {
+    if (el) el.dataset.dirty = '1';
+}
+
+function clearDirty(...ids) {
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) delete el.dataset.dirty;
+    });
+}
+
+function initDirtyTracking() {
+    ['hotspot-ssid', 'hotspot-password', 'hotspot-channel', 'hotspot-wlan', 'apn-name', 'apn-type'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', () => markDirty(el));
+        el.addEventListener('change', () => markDirty(el));
+    });
+}
+
 function initSSE() {
+    initDirtyTracking();
+
     evtSource = new EventSource(apiURL('/api/events'));
 
-    evtSource.onmessage = function(event) {
+    evtSource.onmessage = function (event) {
         try {
+            sseReconnectShown = false;
             const data = JSON.parse(event.data);
             updateUI(data);
-            // Keep history chart in sync cheaply from SSE signal samples
             if (data.signal && (data.signal.rssi || data.signal.percentage)) {
                 historyPoints.push({
                     timestamp: new Date().toISOString(),
@@ -50,14 +119,17 @@ function initSSE() {
                 drawSignalChart(historyPoints);
             }
         } catch (e) {
-            console.error("SSE parse error", e);
+            console.error('SSE parse error', e);
         }
     };
 
-    evtSource.onerror = function() {
-        // SSE transport issue — do not claim modem USB is down
-        document.getElementById('conn-status').innerText =
-            (document.getElementById('conn-status').innerText || '') + ' (SSE reconnecting…)';
+    evtSource.onerror = function () {
+        if (sseReconnectShown) return;
+        sseReconnectShown = true;
+        const cs = document.getElementById('conn-status');
+        if (cs && !/SSE reconnecting/.test(cs.innerText || '')) {
+            cs.innerText = (cs.innerText || 'AT') + ' · SSE reconnecting…';
+        }
     };
 
     const modemSel = document.getElementById('modem-select');
@@ -115,7 +187,6 @@ function fillATAndDataForModem(modem) {
     }
     fillSelect(document.getElementById('at-port-select'), atOpts, atSelected);
 
-    // Data interfaces: prefer RNDIS net ifaces, else MBIM nodes
     const dataOpts = [];
     (modem && modem.net_ifaces ? modem.net_ifaces : []).forEach(p => {
         dataOpts.push({
@@ -133,7 +204,6 @@ function fillATAndDataForModem(modem) {
             iface: p.path
         });
     });
-    // Fallback: collect from all modems if current has none
     if (!dataOpts.length && modemInventory && modemInventory.modems) {
         modemInventory.modems.forEach(m => {
             (m.net_ifaces || []).forEach(p => {
@@ -166,7 +236,6 @@ function fillATAndDataForModem(modem) {
         label: o.label
     })), dataSelected);
 
-    // stash full option meta for connect
     window.__dataIfaceOptions = dataOpts;
 
     const modeEl = document.getElementById('data-mode');
@@ -175,6 +244,7 @@ function fillATAndDataForModem(modem) {
     }
     const btn = document.getElementById('data-connect-btn');
     if (btn) btn.disabled = dataOpts.length === 0;
+    updateOverview();
 }
 
 function onModemDropdownChange() {
@@ -202,52 +272,38 @@ function applyInventoryToUI(data) {
     const hint = document.getElementById('modem-hint');
     if (hint) {
         if (!(data.modems && data.modems.length)) {
-            hint.textContent = 'No modems found. Plug in the FM350 and click Refresh (run as root if permission denied).';
+            hint.textContent = 'No modem found. Check USB power / VID:PID and permissions.';
         } else if (data.note) {
             hint.textContent = data.note;
-        } else {
-            hint.textContent = 'Select a modem and AT port, then Use selected to connect monitoring.';
         }
     }
-
-    document.getElementById('mbim-cli').innerText = data.mbimcli_available ? 'available' : 'missing';
-    const dataHint = document.getElementById('data-hint');
-    if (dataHint) {
-        if (data.note) {
-            dataHint.textContent = data.note;
-        } else {
-            dataHint.innerHTML = 'Apply APN via AT first. <strong>RNDIS</strong>: DHCP on net iface. <strong>MBIM</strong>: needs <code>/dev/cdc-wdm*</code> + mbimcli.';
-        }
+    const mbim = document.getElementById('mbim-cli');
+    if (mbim) mbim.innerText = data.mbimcli_available ? 'yes' : 'no';
+    const dh = document.getElementById('data-hint');
+    if (dh && data.install_hint) {
+        dh.textContent = data.install_hint;
     }
+    updateOverview();
 }
 
 async function refreshModems() {
     try {
         const resp = await fetch(apiURL('/api/modems'), {headers: apiHeaders(false)});
-        if (resp.status === 401) {
-            logConsole('Unauthorized — open UI with ?token=YOUR_TOKEN or set localStorage fm350_token');
-            return;
-        }
-        const data = await resp.json();
-        applyInventoryToUI(data);
+        if (!resp.ok) return;
+        applyInventoryToUI(await resp.json());
     } catch (e) {
-        console.error('refreshModems', e);
+        console.error(e);
     }
 }
 
 async function refreshUSBMode() {
-    const el = document.getElementById('usb-mode-current');
-    const sel = document.getElementById('usb-mode-select');
-    if (!el && !sel) return;
     try {
         const resp = await fetch(apiURL('/api/usbmode'), {headers: apiHeaders(false)});
         if (!resp.ok) return;
         const data = await resp.json();
-        if (el) {
-            el.innerText = data.mode
-                ? (data.label || ('mode ' + data.mode))
-                : (data.error || 'unknown');
-        }
+        setText('usb-mode-current', data.label || (data.mode ? String(data.mode) : '-') +
+            (data.error ? ' (' + data.error + ')' : ''));
+        const sel = document.getElementById('usb-mode-select');
         if (sel && data.supported) {
             const prev = sel.value;
             sel.innerHTML = '';
@@ -271,7 +327,7 @@ async function applyUSBMode() {
     const sel = document.getElementById('usb-mode-select');
     const mode = sel ? parseInt(sel.value, 10) : 0;
     if (!mode) {
-        logConsole('USB mode: pick a mode first');
+        toast('Pick a USB mode first', 'err');
         return;
     }
     if (!confirm('Set AT+GTUSBMODE=' + mode + '? Modem USB will re-enumerate (brief disconnect).')) return;
@@ -282,16 +338,19 @@ async function applyUSBMode() {
             body: JSON.stringify({mode: mode})
         });
         const res = await resp.json();
+        toast(res.status === 'ok' ? 'USB mode applied' : (res.error || 'USB mode failed'),
+            res.status === 'ok' ? 'ok' : 'err');
         logConsole('USB mode: ' + (res.status || res.error || '') + ' → ' +
             JSON.stringify(res.usb_mode || {}));
         setTimeout(() => { refreshUSBMode(); refreshModems(); }, 3000);
     } catch (e) {
+        toast('USB mode error: ' + e, 'err');
         logConsole('USB mode error: ' + e);
     }
 }
 
 function parseDataIfaceSelection() {
-    const val = document.getElementById('data-iface-select').value || '';
+    const val = (document.getElementById('data-iface-select') || {}).value || '';
     const opts = window.__dataIfaceOptions || [];
     const hit = opts.find(o => o.value === val);
     if (hit) return {mode: hit.mode, iface: hit.iface};
@@ -318,39 +377,53 @@ async function applyModemSelection() {
         });
         const data = await resp.json();
         if (!resp.ok) {
+            toast(data.error || 'Select failed', 'err');
             logConsole(`Select modem: ${data.error || resp.status}`);
             return;
         }
         applyInventoryToUI(data);
+        toast('Modem selection applied', 'ok');
         logConsole(`Using modem ${data.selected_modem_id || modem_id} AT=${data.selected_at_port || at_port || '-'} data=${data.selected_net || data.selected_mbim || '-'}`);
         const st = await fetch(apiURL('/api/status'), {headers: apiHeaders(false)});
         if (st.ok) updateUI(await st.json());
     } catch (e) {
+        toast('Select error: ' + e, 'err');
         logConsole(`Select modem error: ${e}`);
     }
 }
 
 async function dataConnect() {
-    const apn = document.getElementById('apn-name').value || '';
+    const apn = (document.getElementById('apn-name') || {}).value || '';
     const sel = parseDataIfaceSelection();
     if (!sel.iface) {
-        logConsole('Data connect: no interface — modem may only expose AT ports');
+        toast('No data interface — modem may only expose AT', 'err');
         return;
     }
-    try {
-        // Persist selection first
-        await applyModemSelection();
-        const resp = await fetch(apiURL('/api/data/connect'), {
-            method: 'POST',
-            headers: apiHeaders(true),
-            body: JSON.stringify({mode: sel.mode, iface: sel.iface, apn: apn})
-        });
-        const res = await resp.json();
-        logConsole(`Data connect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\n${res.output || ''}`);
-        refreshModems();
-    } catch (e) {
-        logConsole(`Data connect error: ${e}`);
-    }
+    const btn = document.getElementById('data-connect-btn');
+    await withBusy(btn, async () => {
+        try {
+            await applyModemSelection();
+            const resp = await fetch(apiURL('/api/data/connect'), {
+                method: 'POST',
+                headers: apiHeaders(true),
+                body: JSON.stringify({mode: sel.mode, iface: sel.iface, apn: apn})
+            });
+            const res = await resp.json();
+            const ok = resp.ok && !res.error;
+            dataSessionNote = ok ? `connected (${sel.mode} ${sel.iface})` : (res.error || 'failed');
+            setText('data-status', dataSessionNote);
+            toast(ok ? 'WAN connect OK' : ('WAN: ' + (res.error || 'failed')), ok ? 'ok' : 'err');
+            logConsole(`Data connect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\n${res.output || ''}`);
+            refreshModems();
+            refreshHotspot();
+            updateOverview();
+        } catch (e) {
+            dataSessionNote = 'error';
+            setText('data-status', dataSessionNote);
+            toast('Data connect error: ' + e, 'err');
+            logConsole(`Data connect error: ${e}`);
+        }
+    });
 }
 
 async function dataDisconnect() {
@@ -362,66 +435,142 @@ async function dataDisconnect() {
             body: JSON.stringify({mode: sel.mode, iface: sel.iface})
         });
         const res = await resp.json();
+        dataSessionNote = 'disconnected';
+        setText('data-status', dataSessionNote);
+        toast('WAN disconnected', 'ok');
         logConsole(`Data disconnect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\n${res.output || ''}`);
         refreshModems();
+        updateOverview();
     } catch (e) {
+        toast('Disconnect error: ' + e, 'err');
         logConsole(`Data disconnect error: ${e}`);
     }
 }
 
-function updateUI(data) {
-    const connDot = document.getElementById('conn-dot');
-    const connStatus = document.getElementById('conn-status');
+function updateHeaderStatus(data) {
+    const atOk = data && data.modem && data.modem.connected;
+    setDot('status-at-dot', atOk ? 'ok' : 'err');
+    setDot('conn-dot', atOk ? 'connected' : 'disconnected');
+    const port = (data && data.modem && data.modem.port_path) || '';
+    setText('status-at-text', atOk ? (port || 'up') : 'down');
+    setText('conn-status', atOk ? `AT linked (${port || 'USB'})` : 'AT disconnected');
 
-    if (data.modem && data.modem.connected) {
-        connDot.className = 'dot connected';
-        connStatus.innerText = `Connected (${data.modem.port_path || 'USB'})`;
-    } else {
-        connDot.className = 'dot disconnected';
-        connStatus.innerText = 'Disconnected';
+    const wanAddrs = lastHotspot && lastHotspot.uplink_addrs;
+    const wanIface = (lastHotspot && lastHotspot.uplink_iface) ||
+        (modemInventory && modemInventory.selected_net) || '';
+    const wanUp = wanAddrs && wanAddrs.length;
+    setDot('status-wan-dot', wanUp ? 'ok' : (wanIface ? 'warn' : 'err'));
+    setText('status-wan-text', wanUp ? wanAddrs[0] : (wanIface || 'no iface'));
+
+    const apState = (lastHotspot && lastHotspot.state) || 'stopped';
+    const apRun = apState === 'running';
+    setDot('status-ap-dot', apRun ? 'ok' : (apState === 'error' ? 'err' : 'disconnected'));
+    setText('status-ap-text', apState);
+}
+
+function updateOverview() {
+    const data = lastStatus || {};
+    const atOk = data.modem && data.modem.connected;
+    setChip('ov-chip-at', 'AT: ' + (atOk ? 'linked' : 'down'), atOk ? 'ok' : 'err');
+    const sim = (data.sim && data.sim.state) || '—';
+    const simOk = /ready/i.test(sim);
+    setChip('ov-chip-sim', 'SIM: ' + sim, simOk ? 'ok' : 'warn');
+    const reg = (data.network && data.network.reg_state) || '—';
+    const regOk = /home|roam|registered/i.test(reg);
+    setChip('ov-chip-reg', 'Reg: ' + reg, regOk ? 'ok' : 'warn');
+
+    const wanAddrs = lastHotspot && lastHotspot.uplink_addrs;
+    const wanUp = wanAddrs && wanAddrs.length;
+    setChip('ov-chip-wan', 'WAN: ' + (wanUp ? 'up' : 'down'), wanUp ? 'ok' : 'err');
+    const apState = (lastHotspot && lastHotspot.state) || 'stopped';
+    setChip('ov-chip-ap', 'AP: ' + apState, apState === 'running' ? 'ok' : (apState === 'error' ? 'err' : ''));
+
+    const pct = (data.signal && data.signal.percentage) || 0;
+    const fill = document.getElementById('ov-signal-fill');
+    if (fill) fill.style.width = pct + '%';
+    setText('ov-signal-pct', pct + '%');
+    const op = (data.network && data.network.operator) || '-';
+    const tech = (data.network && data.network.tech) || '-';
+    setText('ov-net', op + ' · ' + tech);
+
+    let updated = '-';
+    if (data.updated_at) {
+        try {
+            updated = new Date(data.updated_at).toLocaleString();
+        } catch (e) {
+            updated = String(data.updated_at);
+        }
     }
+    setText('ov-updated', updated);
+    setText('footer-updated', updated);
+
+    const iface = (lastHotspot && lastHotspot.uplink_iface) ||
+        (modemInventory && modemInventory.selected_net) || '-';
+    const ips = wanAddrs && wanAddrs.length ? wanAddrs.join(', ') : '-';
+    setText('ov-wan-detail', iface + ' · ' + ips);
+    setText('wan-ip', (data.apn && data.apn.ip_addr) || ips);
+
+    const ssid = lastHotspot && lastHotspot.config && lastHotspot.config.ssid;
+    const ncli = (lastHotspot && lastHotspot.clients && lastHotspot.clients.length) || 0;
+    setText('ov-ap-detail', (ssid || '—') + ' · ' + apState + ' · ' + ncli + ' client(s)');
+
+    setText('data-status', dataSessionNote);
+    updateHeaderStatus(data);
+}
+
+function updateUI(data) {
+    lastStatus = data;
+    updateHeaderStatus(data);
 
     if (data.modem) {
-        document.getElementById('modem-port').innerText = data.modem.port_path || '-';
-        document.getElementById('modem-power').innerText = data.modem.power_control || '-';
+        setText('modem-port', data.modem.port_path || '-');
+        setText('modem-power', data.modem.power_control || '-');
     }
 
     if (data.signal) {
-        document.getElementById('signal-fill').style.width = `${data.signal.percentage || 0}%`;
-        document.getElementById('signal-pct').innerText = `${data.signal.percentage || 0}%`;
-        document.getElementById('sig-rssi').innerText = data.signal.rssi ? `${data.signal.rssi} dBm` : '-';
-        document.getElementById('sig-rsrp').innerText = data.signal.rsrp ? `${data.signal.rsrp} dBm` : '-';
-        document.getElementById('sig-rsrq').innerText = data.signal.rsrq ? `${data.signal.rsrq} dB` : '-';
+        const pct = data.signal.percentage || 0;
+        const sf = document.getElementById('signal-fill');
+        if (sf) sf.style.width = pct + '%';
+        setText('signal-pct', pct + '%');
+        setText('sig-rssi', data.signal.rssi ? `${data.signal.rssi} dBm` : '-');
+        setText('sig-rsrp', data.signal.rsrp ? `${data.signal.rsrp} dBm` : '-');
+        setText('sig-rsrq', data.signal.rsrq ? `${data.signal.rsrq} dB` : '-');
     }
 
     if (data.network) {
-        document.getElementById('net-operator').innerText = data.network.operator || '-';
-        document.getElementById('net-tech').innerText = data.network.tech || '-';
-        document.getElementById('net-reg').innerText = data.network.reg_state || '-';
+        setText('net-operator', data.network.operator || '-');
+        setText('net-tech', data.network.tech || '-');
+        setText('net-reg', data.network.reg_state || '-');
     }
 
     if (data.sim) {
-        document.getElementById('sim-state').innerText = data.sim.state || '-';
-        document.getElementById('sim-imsi').innerText = data.sim.imsi || '-';
-        document.getElementById('sim-iccid').innerText = data.sim.iccid || '-';
+        setText('sim-state', data.sim.state || '-');
+        setText('sim-imsi', data.sim.imsi || '-');
+        setText('sim-iccid', data.sim.iccid || '-');
     }
 
     if (data.rat_mode) {
-        document.getElementById('rat-mode').innerText = data.rat_mode;
+        setText('rat-mode', data.rat_mode);
     }
 
     if (data.apn && data.apn.apn) {
         const apnInput = document.getElementById('apn-name');
-        if (document.activeElement !== apnInput) {
+        if (apnInput && document.activeElement !== apnInput && !apnInput.dataset.dirty) {
             apnInput.value = data.apn.apn;
         }
-        if (data.apn.pdp_type) {
-            document.getElementById('apn-type').value = data.apn.pdp_type;
+        const apnType = document.getElementById('apn-type');
+        if (data.apn.pdp_type && apnType && !apnType.dataset.dirty) {
+            apnType.value = data.apn.pdp_type;
+        }
+        if (data.apn.ip_addr) {
+            setText('wan-ip', data.apn.ip_addr);
         }
     }
 
     const errEl = document.getElementById('status-error');
-    errEl.innerText = data.error || '';
+    if (errEl) errEl.innerText = data.error || '';
+
+    updateOverview();
 }
 
 async function setRAT(mode) {
@@ -432,8 +581,11 @@ async function setRAT(mode) {
             body: JSON.stringify({mode: mode})
         });
         const res = await resp.json();
+        toast(res.status === 'ok' ? 'RAT set to ' + mode : (res.error || 'RAT failed'),
+            res.status === 'ok' ? 'ok' : 'err');
         logConsole(`Set RAT mode (${mode}): ${res.status || res.error}`);
     } catch (e) {
+        toast('RAT error: ' + e, 'err');
         logConsole(`Error setting RAT mode: ${e}`);
     }
 }
@@ -442,7 +594,6 @@ async function updateAPN(event) {
     event.preventDefault();
     const type = document.getElementById('apn-type').value;
     const name = document.getElementById('apn-name').value;
-
     try {
         const resp = await fetch(apiURL('/api/apn'), {
             method: 'POST',
@@ -450,8 +601,12 @@ async function updateAPN(event) {
             body: JSON.stringify({cid: 1, pdp_type: type, apn: name})
         });
         const res = await resp.json();
+        const ok = resp.ok && !res.error;
+        toast(ok ? 'APN applied' : (res.error || 'APN failed'), ok ? 'ok' : 'err');
+        if (ok) clearDirty('apn-name', 'apn-type');
         logConsole(`Update APN (${name}): ${res.status || res.error}`);
     } catch (e) {
+        toast('APN error: ' + e, 'err');
         logConsole(`Error updating APN: ${e}`);
     }
 }
@@ -486,8 +641,11 @@ async function usbReset() {
             headers: apiHeaders(false)
         });
         const res = await resp.json();
+        toast(res.status === 'ok' ? 'USB reset issued' : (res.error || 'reset failed'),
+            res.status === 'ok' ? 'ok' : 'err');
         logConsole(`USB reset: ${res.status || res.error}`);
     } catch (e) {
+        toast('USB reset error: ' + e, 'err');
         logConsole(`USB reset error: ${e}`);
     }
 }
@@ -520,8 +678,6 @@ function drawSignalChart(points) {
     const w = cssW;
     const h = cssH;
     ctx.clearRect(0, 0, w, h);
-
-    // background
     ctx.fillStyle = '#090d16';
     ctx.fillRect(0, 0, w, h);
 
@@ -530,7 +686,6 @@ function drawSignalChart(points) {
     const minV = 0;
     const maxV = 100;
 
-    // grid
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = 1;
     for (let y = 0; y <= 4; y++) {
@@ -541,7 +696,6 @@ function drawSignalChart(points) {
         ctx.stroke();
     }
 
-    // line
     ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -553,7 +707,6 @@ function drawSignalChart(points) {
     });
     ctx.stroke();
 
-    // last point label
     const last = vals[vals.length - 1];
     ctx.fillStyle = '#94a3b8';
     ctx.font = '12px system-ui, sans-serif';
@@ -562,23 +715,53 @@ function drawSignalChart(points) {
 
 function logConsole(msg) {
     const consoleDiv = document.getElementById('console-output');
+    if (!consoleDiv) return;
     consoleDiv.innerText += `\n${msg}`;
     consoleDiv.scrollTop = consoleDiv.scrollHeight;
 }
 
+function fillClientTable(clients, running) {
+    const body = document.getElementById('hotspot-client-body');
+    if (!body) return;
+    body.innerHTML = '';
+    if (!clients || !clients.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 3;
+        td.className = 'muted';
+        td.textContent = running ? 'No clients associated' : 'Hotspot not running';
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+    }
+    clients.forEach(c => {
+        const tr = document.createElement('tr');
+        [c.mac || '—', c.ip || '—', c.name || '—'].forEach(v => {
+            const td = document.createElement('td');
+            td.textContent = v;
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
+}
+
 function refreshHotspot() {
-    return fetch(apiURL('/api/hotspot'), { headers: apiHeaders(false) })
+    return fetch(apiURL('/api/hotspot'), {headers: apiHeaders(false)})
         .then(r => r.json())
         .then(st => {
-            const set = (id, v) => {
-                const el = document.getElementById(id);
-                if (el) el.innerText = v;
-            };
-            set('hotspot-state', st.state || '-');
+            lastHotspot = st;
+            setText('hotspot-state', st.state || '-');
+            const chip = document.getElementById('hotspot-state-chip');
+            if (chip) {
+                chip.textContent = 'State: ' + (st.state || '—');
+                chip.className = 'chip' + (st.state === 'running' ? ' ok' : st.state === 'error' ? ' err' : '');
+            }
             const up = (st.uplink_iface || '-') + (st.uplink_addrs && st.uplink_addrs.length
                 ? ' (' + st.uplink_addrs.join(', ') + ')' : '');
-            set('hotspot-uplink', up);
-            set('hotspot-lan', (st.lan_addrs && st.lan_addrs.length) ? st.lan_addrs.join(', ') : (st.config && st.config.lan_cidr) || '-');
+            setText('hotspot-uplink', up);
+            setText('hotspot-lan', (st.lan_addrs && st.lan_addrs.length)
+                ? st.lan_addrs.join(', ')
+                : ((st.config && st.config.lan_cidr) || '-'));
             const t = st.tools || {};
             const missing = [];
             if (!t.hostapd) missing.push('hostapd');
@@ -586,19 +769,18 @@ function refreshHotspot() {
             if (!t.iw) missing.push('iw');
             if (!t.ip) missing.push('ip');
             if (!t.nftables && !t.iptables) missing.push('nft|iptables');
-            set('hotspot-tools', missing.length ? 'missing: ' + missing.join(', ') : 'ok');
+            setText('hotspot-tools', missing.length ? 'missing: ' + missing.join(', ') : 'ok');
+
             const clients = st.clients || [];
             if (!clients.length) {
-                set('hotspot-clients', st.state === 'running' ? '(none associated)' : '-');
+                setText('hotspot-clients', st.state === 'running' ? '0' : '-');
             } else {
-                set('hotspot-clients', clients.map(c => {
-                    const parts = [c.mac || '?', c.ip, c.name].filter(Boolean);
-                    return parts.join(' ');
-                }).join('; '));
+                setText('hotspot-clients', String(clients.length));
             }
+            fillClientTable(clients, st.state === 'running');
 
             const sel = document.getElementById('hotspot-wlan');
-            if (sel) {
+            if (sel && !sel.dataset.dirty) {
                 const cur = sel.value;
                 sel.innerHTML = '';
                 const devs = st.devices || [];
@@ -631,6 +813,16 @@ function refreshHotspot() {
             } else if (hint && st.note) {
                 hint.textContent = st.note;
             }
+
+            const startBtn = document.getElementById('hotspot-start-btn');
+            if (startBtn) {
+                const toolsOk = t.hostapd && t.dnsmasq && t.ip && (t.nftables || t.iptables);
+                const hasUplink = !!(st.uplink_iface || (st.uplink_addrs && st.uplink_addrs.length));
+                startBtn.disabled = !toolsOk || st.state === 'running';
+                startBtn.title = !toolsOk ? 'Missing host tools' : (!hasUplink ? 'Connect WAN first' : '');
+            }
+
+            updateOverview();
         })
         .catch(e => console.error('hotspot status', e));
 }
@@ -656,38 +848,50 @@ function hotspotSaveConfig() {
     }).then(async r => {
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || r.statusText);
-        alert('Hotspot config saved');
+        clearDirty('hotspot-ssid', 'hotspot-password', 'hotspot-channel', 'hotspot-wlan');
+        toast('Hotspot config saved', 'ok');
         return refreshHotspot();
-    }).catch(e => alert('Save failed: ' + e.message));
+    }).catch(e => toast('Save failed: ' + e.message, 'err'));
 }
 
 function hotspotStart() {
     const body = hotspotFormBody();
-    if (!body.password) {
-        // allow start with previously saved password
-        delete body.password;
-    }
-    return fetch(apiURL('/api/hotspot/start'), {
-        method: 'POST',
-        headers: apiHeaders(true),
-        body: JSON.stringify(body)
-    }).then(async r => {
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.error || r.statusText);
-        return refreshHotspot();
-    }).catch(e => alert('Hotspot start failed: ' + e.message));
+    if (!body.password) delete body.password;
+    const btn = document.getElementById('hotspot-start-btn');
+    return withBusy(btn, () =>
+        fetch(apiURL('/api/hotspot/start'), {
+            method: 'POST',
+            headers: apiHeaders(true),
+            body: JSON.stringify(body)
+        }).then(async r => {
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(j.error || r.statusText);
+            clearDirty('hotspot-ssid', 'hotspot-password', 'hotspot-channel', 'hotspot-wlan');
+            toast('Hotspot started', 'ok');
+            return refreshHotspot();
+        }).catch(e => toast('Hotspot start failed: ' + e.message, 'err'))
+    );
 }
 
 function hotspotStop() {
-    return fetch(apiURL('/api/hotspot/stop'), {
-        method: 'POST',
-        headers: apiHeaders(true)
-    }).then(async r => {
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.error || r.statusText);
-        return refreshHotspot();
-    }).catch(e => alert('Hotspot stop failed: ' + e.message));
+    const btn = document.getElementById('hotspot-stop-btn');
+    return withBusy(btn, () =>
+        fetch(apiURL('/api/hotspot/stop'), {
+            method: 'POST',
+            headers: apiHeaders(true)
+        }).then(async r => {
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(j.error || r.statusText);
+            toast('Hotspot stopped', 'ok');
+            return refreshHotspot();
+        }).catch(e => toast('Hotspot stop failed: ' + e.message, 'err'))
+    );
 }
 
-window.addEventListener('DOMContentLoaded', initSSE);
+// Bootstrapped by assets/boot.js (initLayout + initSSE).
 window.addEventListener('resize', () => drawSignalChart(historyPoints));
+window.historyPoints = historyPoints;
+// Keep historyPoints in sync for layout.js chart redraw
+Object.defineProperty(window, 'historyPointsRef', {
+    get: function () { return historyPoints; }
+});

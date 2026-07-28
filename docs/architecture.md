@@ -82,7 +82,7 @@ See [`docs/wifi-hotspot.md`](wifi-hotspot.md).
      - USB composition: `/api/usbmode` (GET/POST, `AT+GTUSBMODE`)
      - MBIM (legacy): `/api/mbim`, `/api/mbim/connect`, `/api/mbim/disconnect`
    - Optional API token (`-token` / `FM350_API_TOKEN`): Bearer, `X-API-Token`, or `?token=` (SSE).
-   - Static UI from `internal/template`.
+   - Static UI from `internal/template` — feature-based assets + layout shell (topbar/sidebar/content/footer); see [`webui.md`](webui.md).
 
 4. **Domain (`internal/pkg/domain`)**
    - Shared JSON-friendly structs and enums; no I/O.

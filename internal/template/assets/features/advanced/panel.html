@@ -1,0 +1,38 @@
+{{define "panel-advanced"}}
+<section id="panel-advanced" class="panel" data-panel="advanced" hidden>
+    <div class="grid">
+        <section class="card">
+            <h2>USB composition</h2>
+            <div class="info-list">
+                <div class="info-item"><span>Current:</span> <strong id="usb-mode-current">-</strong></div>
+            </div>
+            <div class="form-group mt-15">
+                <label for="usb-mode-select">Profile (AT+GTUSBMODE)</label>
+                <select id="usb-mode-select"></select>
+            </div>
+            <div class="button-group mt-15">
+                <button type="button" class="btn-primary" onclick="applyUSBMode()">Apply mode</button>
+                <button type="button" onclick="refreshUSBMode()">Refresh</button>
+            </div>
+            <p class="hint" id="usb-mode-hint">Stock FM350 modes 40/41 are RNDIS+serial (not MBIM). Changing mode re-enumerates USB.</p>
+        </section>
+        <section class="card">
+            <h2>Destructive</h2>
+            <div class="callout-danger">
+                <p>USB hard reset re-enumerates the modem and can drop AT/data sessions.</p>
+                <div class="button-group mt-15">
+                    <button type="button" class="btn-danger" onclick="usbReset()">USB hard reset</button>
+                </div>
+            </div>
+        </section>
+        <section class="card full-width">
+            <h2>Raw AT terminal</h2>
+            <div id="console-output" class="console">Ready...</div>
+            <form onsubmit="sendRawAT(event)" class="console-input-row">
+                <input type="text" id="at-input" placeholder="e.g. AT+CSQ" required>
+                <button type="submit">Send</button>
+            </form>
+        </section>
+    </div>
+</section>
+{{end}}

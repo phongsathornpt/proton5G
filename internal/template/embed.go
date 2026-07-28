@@ -2,5 +2,7 @@ package template
 
 import "embed"
 
-//go:embed index.html style.css app.js
-var Files embed.FS
+// Assets is the feature-based WebUI tree (layout + shared + features).
+//
+//go:embed all:assets
+var Assets embed.FS

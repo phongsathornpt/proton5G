@@ -65,6 +65,23 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] Config persistence to StateDirectory (`hotspot.json`, mode 0600)
 - [x] Associated client list (iw station dump + dnsmasq leases)
 
+## WebUI layout (router IA)
+- [x] Sticky header + AT/WAN/AP status pills
+- [x] Nav panels: Overview / Cellular / WAN / LAN / Advanced
+- [x] Overview dashboard + primary CTAs
+- [x] WAN = APN + data bearer; LAN = hotspot + clients table
+- [x] Advanced: USB mode, hard reset, AT console
+- [x] Responsive CSS, chips, toasts, dirty form fields
+- [x] Docs `docs/webui.md`
+
+## WebUI structure (feature + layout shell)
+- [x] `assets/layout` topbar, sidebar, content, footer + base template
+- [x] `assets/features/*` panel HTML per feature
+- [x] `assets/shared` tokens + components CSS
+- [x] `html/template` RenderIndex + `GET /` / `GET /assets/*`
+- [x] layout.js nav; app.js behavior; boot.js
+- [ ] Optional: split app.js into per-feature JS modules
+
 ## Optional / Later
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)
 - [ ] **True MBIM composition**: only if a firmware mode document lists a non-RNDIS profile for this SKU
