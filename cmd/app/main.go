@@ -69,7 +69,7 @@ func main() {
 		log.Printf("[INFO] Using override AT serial port: %s", targetPort)
 	}
 
-	atClient := repository.NewClient(targetPort)
+	atClient := repository.NewTieredClient(targetPort)
 	if err := atClient.Connect(); err != nil {
 		log.Printf("[WARN] Failed to open AT serial port (%s): %v. Will retry on status polls.", targetPort, err)
 	} else {
