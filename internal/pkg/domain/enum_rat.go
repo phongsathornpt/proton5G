@@ -37,6 +37,13 @@ const (
 	RATPrefNSA  RATModePref = "nsa"
 	RATPrefLTE  RATModePref = "lte"
 	RATPrefAuto RATModePref = "auto"
+
+	// Thailand presets keep band locking behind the existing RAT control surface.
+	// The repository owns the Fibocom-specific GTACT band IDs.
+	RATPrefTHNSA       RATModePref = "th-nsa"
+	RATPrefTHNSAB40N41 RATModePref = "th-nsa-b40-n41"
+	RATPrefTHLTE       RATModePref = "th-lte"
+	RATPrefTHLTEB40B41 RATModePref = "th-lte-b40-b41"
 )
 
 // ParseRATModePref parses API mode tokens (case-insensitive).
@@ -52,19 +59,27 @@ func ParseRATModePref(s string) (RATModePref, error) {
 		return RATPrefLTE, nil
 	case string(RATPrefAuto), "all":
 		return RATPrefAuto, nil
+	case string(RATPrefTHNSA), "thai-nsa", "thailand-nsa":
+		return RATPrefTHNSA, nil
+	case string(RATPrefTHNSAB40N41), "thai-nsa-b40-n41":
+		return RATPrefTHNSAB40N41, nil
+	case string(RATPrefTHLTE), "thai-lte", "thailand-lte":
+		return RATPrefTHLTE, nil
+	case string(RATPrefTHLTEB40B41), "thai-lte-b40-b41":
+		return RATPrefTHLTEB40B41, nil
 	default:
-		return "", fmt.Errorf("invalid RAT mode %q (want endc|nsa|5g-sa|5g|lte|auto)", s)
+		return "", fmt.Errorf("invalid RAT mode %q (want endc|nsa|5g-sa|5g|lte|auto|th-nsa|th-nsa-b40-n41|th-lte|th-lte-b40-b41)", s)
 	}
 }
 
 // GTACTCode returns the AT+GTACT numeric mode for this preference.
 func (p RATModePref) GTACTCode() int {
 	switch p {
-	case RATPrefENDC, RATPrefNSA:
+	case RATPrefENDC, RATPrefNSA, RATPrefTHNSA, RATPrefTHNSAB40N41:
 		return GTACTENDC
 	case RATPref5G, RATPref5GSA:
 		return GTACT5GOnly
-	case RATPrefLTE:
+	case RATPrefLTE, RATPrefTHLTE, RATPrefTHLTEB40B41:
 		return GTACTLTEOnly
 	default:
 		return GTACTAuto
@@ -74,13 +89,13 @@ func (p RATModePref) GTACTCode() int {
 // ToDisplay maps an API preference to a display RATMode.
 func (p RATModePref) ToDisplay() RATMode {
 	switch p {
-	case RATPrefENDC, RATPrefNSA:
+	case RATPrefENDC, RATPrefNSA, RATPrefTHNSA, RATPrefTHNSAB40N41:
 		return RATModeENDC
 	case RATPref5GSA:
 		return RATMode5GSA
 	case RATPref5G:
 		return RATMode5GOnly
-	case RATPrefLTE:
+	case RATPrefLTE, RATPrefTHLTE, RATPrefTHLTEB40B41:
 		return RATModeLTEOnly
 	default:
 		return RATModeAuto
