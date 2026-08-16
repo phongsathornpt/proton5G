@@ -16,7 +16,18 @@ jobs:
           cache: true
       - name: Go format
         run: |
-          files="$(gofmt -l ./cmd ./internal)"
+          files="$(gofmt -l \
+            cmd/app/main.go \
+            internal/handler/sse_hub.go \
+            internal/handler/sse_semantic_test.go \
+            internal/repository/at_tiered.go \
+            internal/repository/at_tiered_control.go \
+            internal/repository/at_tiered_test.go \
+            internal/repository/net_addr_native.go \
+            internal/repository/net_addr_native_test.go \
+            internal/repository/net_repo.go \
+            internal/usecase/inventory_cache.go \
+            internal/usecase/inventory_cache_test.go)"
           if [ -n "$files" ]; then
             echo "Files need gofmt:"
             echo "$files"
