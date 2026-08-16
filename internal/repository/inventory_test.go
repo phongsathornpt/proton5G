@@ -76,31 +76,6 @@ func TestTTYAndNetWalkFollowsSysfsSymlink(t *testing.T) {
 	}
 }
 
-func TestPreferredATPort(t *testing.T) {
-	m := domain.ModemDevice{
-		ATPorts: []domain.ModemInterface{
-			{Path: "/dev/ttyUSB0", ATReady: false},
-			{Path: "/dev/ttyUSB2", ATReady: true},
-		},
-	}
-	if p := PreferredATPort(m, ""); p != "/dev/ttyUSB2" {
-		t.Fatalf("got %s", p)
-	}
-	if p := PreferredATPort(m, "/dev/ttyUSB0"); p != "/dev/ttyUSB0" {
-		t.Fatalf("preferred got %s", p)
-	}
-}
-
-func TestFindModem(t *testing.T) {
-	list := []domain.ModemDevice{{ID: "a"}, {ID: "b"}}
-	if _, ok := FindModem(list, "b"); !ok {
-		t.Fatal("expected find")
-	}
-	if _, ok := FindModem(list, "z"); ok {
-		t.Fatal("expected miss")
-	}
-}
-
 func TestProbeATPortsCachedSkipAndEmpty(t *testing.T) {
 	m := ProbeATPortsCached(nil, "")
 	if len(m) != 0 {

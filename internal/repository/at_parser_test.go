@@ -59,14 +59,11 @@ func TestParseICCID(t *testing.T) {
 	}
 }
 
-func TestParseCOPS(t *testing.T) {
+func TestParseCOPSFull(t *testing.T) {
 	resp := `+COPS: 0,0,"T-Mobile",13`
 	oper, act, hasAct := ParseCOPSFull(resp)
 	if oper != "T-Mobile" || !hasAct || act != 13 {
 		t.Fatalf("expected T-Mobile / 13, got %s / %d (hasAct=%v)", oper, act, hasAct)
-	}
-	if got := ParseCOPS(resp); got != "T-Mobile" {
-		t.Fatalf("expected T-Mobile, got %s", got)
 	}
 }
 
@@ -93,13 +90,6 @@ func TestParseGTACT(t *testing.T) {
 	modeENDC := ParseGTACT("+GTACT: 17,3,6,0")
 	if modeENDC != domain.RATModeENDC {
 		t.Fatalf("expected 5G NSA (EN-DC), got %s", modeENDC)
-	}
-}
-
-func TestParseE5GOPT(t *testing.T) {
-	opt, ok := ParseE5GOPT("+E5GOPT: 5\r\nOK")
-	if !ok || opt != 5 {
-		t.Fatalf("expected 5, got %d (ok=%v)", opt, ok)
 	}
 }
 

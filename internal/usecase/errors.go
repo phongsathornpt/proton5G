@@ -7,9 +7,6 @@ import (
 
 var errModemUnavailable = errors.New("modem not connected")
 
-// ErrModemUnavailable is returned when AT/USB actions cannot run.
-func ErrModemUnavailable() error { return errModemUnavailable }
-
 func IsModemUnavailable(err error) bool {
 	return errors.Is(err, errModemUnavailable)
 }

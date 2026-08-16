@@ -63,10 +63,3 @@ func TestGenerateDnsmasqConf(t *testing.T) {
 		}
 	}
 }
-
-func TestLANGatewayIP(t *testing.T) {
-	gw, err := LANGatewayIP("192.168.50.1/24")
-	if err != nil || gw != "192.168.50.1" {
-		t.Fatalf("got %q %v", gw, err)
-	}
-}

@@ -299,29 +299,6 @@ func ParseCOPSFull(response string) (oper string, act int, hasAct bool) {
 	return unknownOperator, 0, false
 }
 
-func ParseCOPS(response string) string {
-	oper, _, _ := ParseCOPSFull(response)
-	return oper
-}
-
-// ParseE5GOPT extracts the 5G option mode (e.g. 5=NSA only, 6=SA only, 7=SA+NSA).
-func ParseE5GOPT(response string) (int, bool) {
-	for _, line := range strings.Split(response, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "+E5GOPT:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "+E5GOPT:"))
-			if i := strings.IndexAny(val, ",; "); i > 0 {
-				val = val[:i]
-			}
-			n, err := strconv.Atoi(val)
-			if err == nil {
-				return n, true
-			}
-		}
-	}
-	return 0, false
-}
-
 func ParseRegistration(response string) domain.RegState {
 	for _, line := range strings.Split(response, "\n") {
 		line = strings.TrimSpace(line)

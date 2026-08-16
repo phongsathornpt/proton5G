@@ -29,7 +29,6 @@ const (
 	CmdGTACTSetENDC = "AT+GTACT=17,3,6,0"
 	CmdGTACTSet5GSA = "AT+GTACT=14,6,6,0"
 	CmdGTACTSetAuto = "AT+GTACT=20,6,3,0"
-	CmdGTACTSetLTE  = "AT+GTACT=2,3,3,0"
 	// Thailand radio presets. These stay in the repository layer because they are
 	// Fibocom wire-protocol values. GTACT encodes LTE B40 as 140, LTE B41 as 141,
 	// and NR n41 as 5041.
@@ -93,11 +92,6 @@ func CmdGTACTSetByPref(pref domain.RATModePref) string {
 	default:
 		return CmdGTACTSetAuto
 	}
-}
-
-// CmdE5GOPTSet builds AT+E5GOPT=<mode>.
-func CmdE5GOPTSet(mode int) string {
-	return fmt.Sprintf("AT+E5GOPT=%d", mode)
 }
 
 // CmdGTUSBMODESet builds AT+GTUSBMODE=<mode>.
