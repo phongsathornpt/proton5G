@@ -25,11 +25,19 @@ const (
 	// Proprietary Fibocom signal / cell info (fallback when CESQ is empty).
 	CmdGTCAINFO = "AT+GTCAINFO?"
 	CmdGTCCINFO = "AT+GTCCINFO?"
-	// Parameterized Fibocom GTACT mode strings
+	// Parameterized Fibocom GTACT mode strings.
 	CmdGTACTSetENDC = "AT+GTACT=17,3,6,0"
 	CmdGTACTSet5GSA = "AT+GTACT=14,6,6,0"
 	CmdGTACTSetAuto = "AT+GTACT=20,6,3,0"
 	CmdGTACTSetLTE  = "AT+GTACT=2,3,3,0"
+	// Thailand radio presets. These stay in the repository layer because they are
+	// Fibocom wire-protocol values. B40/B41 use the 100+LTE-band encoding.
+	// NR n41 band filtering is firmware-dependent; profiles therefore prefer
+	// Thailand LTE anchors and EN-DC, then leave NR carrier choice to the modem/network.
+	CmdGTACTSetTHNSA       = "AT+GTACT=17,3,6,101,103,108,128,140,141"
+	CmdGTACTSetTHNSAB40N41 = "AT+GTACT=17,3,6,140,141"
+	CmdGTACTSetTHLTE       = "AT+GTACT=2,3,3,101,103,108,128,140,141"
+	CmdGTACTSetTHLTEB40B41 = "AT+GTACT=2,3,3,140,141"
 	// Identity (polled once until IMEI is known).
 	CmdCGMI = "AT+CGMI"
 	CmdCGMM = "AT+CGMM"
@@ -69,12 +77,20 @@ func CmdGTACTSetByPref(pref domain.RATModePref) string {
 	switch pref {
 	case domain.RATPrefENDC, domain.RATPrefNSA:
 		return CmdGTACTSetENDC
+	case domain.RATPrefTHNSA:
+		return CmdGTACTSetTHNSA
+	case domain.RATPrefTHNSAB40N41:
+		return CmdGTACTSetTHNSAB40N41
 	case domain.RATPref5GSA:
 		return CmdGTACTSet5GSA
 	case domain.RATPref5G:
 		return CmdGTACTSet(domain.GTACT5GOnly)
 	case domain.RATPrefLTE:
 		return CmdGTACTSet(domain.GTACTLTEOnly)
+	case domain.RATPrefTHLTE:
+		return CmdGTACTSetTHLTE
+	case domain.RATPrefTHLTEB40B41:
+		return CmdGTACTSetTHLTEB40B41
 	default:
 		return CmdGTACTSetAuto
 	}
