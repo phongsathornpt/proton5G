@@ -10,6 +10,7 @@ const (
 	RegHome          RegState = "Registered (Home)"
 	RegSearching     RegState = "Searching"
 	RegDenied        RegState = "Denied"
+	RegUnknown       RegState = "Unknown"
 	RegRoaming       RegState = "Registered (Roaming)"
 )
 
@@ -32,6 +33,8 @@ func ParseRegStat(code int) RegState {
 		return RegSearching
 	case RegStatDenied:
 		return RegDenied
+	case RegStatUnknown:
+		return RegUnknown
 	case RegStatRoaming:
 		return RegRoaming
 	default:
@@ -43,7 +46,7 @@ func ParseRegStat(code int) RegState {
 func ParseRegStatString(s string) RegState {
 	code, err := strconv.Atoi(s)
 	if err != nil {
-		return RegNotRegistered
+		return RegUnknown
 	}
 	return ParseRegStat(code)
 }

@@ -171,7 +171,7 @@ func netIfaceState(name string) string {
 	return strings.TrimSpace(string(b))
 }
 
-func detectDataMode(mbimCount, netCount int) string {
+func detectDataMode(mbimCount, netCount int) domain.DataMode {
 	switch {
 	case mbimCount > 0 && netCount > 0:
 		return domain.DataModeMixed

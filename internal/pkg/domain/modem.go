@@ -20,12 +20,21 @@ type SignalInfo struct {
 	RawCSQ     string `json:"raw_csq"`
 }
 
+// ENDCState is the stable EN-DC runtime state exposed by the API.
+type ENDCState string
+
+const (
+	ENDCStateActive     ENDCState = "Active"
+	ENDCStateConfigured ENDCState = "Configured"
+	ENDCStateInactive   ENDCState = "Inactive"
+)
+
 // ENDCInfo contains 5G Non-Standalone / E-UTRA-NR Dual Connectivity status.
 type ENDCInfo struct {
-	Active     bool   `json:"active"`
-	AnchorBand string `json:"anchor_band,omitempty"` // LTE anchor band (e.g. "B3", "B66")
-	NRBand     string `json:"nr_band,omitempty"`     // 5G NR secondary band (e.g. "n78", "n41")
-	State      string `json:"state,omitempty"`       // "Active", "Configured", "Inactive"
+	Active     bool      `json:"active"`
+	AnchorBand string    `json:"anchor_band,omitempty"` // LTE anchor band (e.g. "B3", "B66")
+	NRBand     string    `json:"nr_band,omitempty"`     // 5G NR secondary band (e.g. "n78", "n41")
+	State      ENDCState `json:"state,omitempty"`
 }
 
 // NetworkInfo holds registration state, operator, technology, and EN-DC status.
@@ -91,11 +100,11 @@ type CellInfo struct {
 
 // CAComponent is one AT+GTCAINFO? primary or secondary carrier.
 type CAComponent struct {
-	Component string `json:"component"`             // PCC, SCC1, …
-	Band      string `json:"band,omitempty"`        // B3, B1, n78, etc.
+	Component string `json:"component"`      // PCC, SCC1, …
+	Band      string `json:"band,omitempty"` // B3, B1, n78, etc.
 	PCI       string `json:"pci,omitempty"`
-	ARFCN     string `json:"arfcn,omitempty"`       // DL EARFCN / NR-ARFCN
-	ULARFCN   string `json:"ul_arfcn,omitempty"`    // UL EARFCN / NR-ARFCN
+	ARFCN     string `json:"arfcn,omitempty"`    // DL EARFCN / NR-ARFCN
+	ULARFCN   string `json:"ul_arfcn,omitempty"` // UL EARFCN / NR-ARFCN
 	DLBW      string `json:"dl_bandwidth,omitempty"`
 	ULBW      string `json:"ul_bandwidth,omitempty"`
 	DLMIMO    string `json:"dl_mimo,omitempty"` // e.g. 2x2, 4x4; active network layer count
@@ -117,16 +126,32 @@ type PDPSession struct {
 	Gateway string `json:"gateway,omitempty"` // guessed .1; not from AT
 }
 
+// WANMethod is the address method currently used by the host-side WAN.
+type WANMethod string
+
+const (
+	WANMethodDHCP   WANMethod = "dhcp"
+	WANMethodStatic WANMethod = "static"
+)
+
+// WANSession is the stable host-side data session state.
+type WANSession string
+
+const (
+	WANSessionConnected    WANSession = "connected"
+	WANSessionDisconnected WANSession = "disconnected"
+)
+
 // WANInfo is host-side RNDIS iface addresses and byte counters.
 type WANInfo struct {
-	Iface     string   `json:"iface,omitempty"`
-	Method    string   `json:"method,omitempty"`  // dhcp | static
-	Session   string   `json:"session,omitempty"` // connected | disconnected
-	Addrs     []string `json:"addrs,omitempty"`
-	RxBytes   uint64   `json:"rx_bytes,omitempty"`
-	TxBytes   uint64   `json:"tx_bytes,omitempty"`
-	RxRateBps int64    `json:"rx_rate_bps,omitempty"`
-	TxRateBps int64    `json:"tx_rate_bps,omitempty"`
+	Iface     string     `json:"iface,omitempty"`
+	Method    WANMethod  `json:"method,omitempty"`
+	Session   WANSession `json:"session,omitempty"`
+	Addrs     []string   `json:"addrs,omitempty"`
+	RxBytes   uint64     `json:"rx_bytes,omitempty"`
+	TxBytes   uint64     `json:"tx_bytes,omitempty"`
+	RxRateBps int64      `json:"rx_rate_bps,omitempty"`
+	TxRateBps int64      `json:"tx_rate_bps,omitempty"`
 }
 
 // ATPoll is one AT repository status sample (no USB/WAN host state).

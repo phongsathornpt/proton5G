@@ -665,13 +665,16 @@ func (s *ModemService) buildInventoryLocked() domain.ModemInventory {
 
 // DataConnect brings up RNDIS (DHCP) or MBIM based on mode.
 func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error) {
-	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	mode, err := domain.ParseDataMode(string(req.Mode))
+	if err != nil {
+		return "", err
+	}
 	iface := strings.TrimSpace(req.Iface)
 
 	s.mu.RLock()
 	if iface == "" {
 		switch mode {
-		case domain.DataModeRNDIS, "net":
+		case domain.DataModeRNDIS:
 			iface = s.selectedNet
 		case domain.DataModeMBIM:
 			iface = s.selectedMBIM
@@ -693,7 +696,7 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 	cid := s.status.APN.CID
 	s.mu.RUnlock()
 
-	if mode == "" || mode == "auto" {
+	if mode == domain.DataModeAuto {
 		if strings.HasPrefix(iface, "/dev/cdc-wdm") {
 			mode = domain.DataModeMBIM
 		} else if iface != "" {
@@ -702,7 +705,7 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 	}
 
 	switch mode {
-	case domain.DataModeRNDIS, "net":
+	case domain.DataModeRNDIS:
 		if iface == "" {
 			return "", fmt.Errorf("no RNDIS/net interface selected (modem has no network iface under USB)")
 		}
@@ -713,7 +716,7 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 		if err == nil {
 			s.mu.Lock()
 			s.status.WAN.Iface = iface
-			s.status.WAN.Session = "connected"
+			s.status.WAN.Session = domain.WANSessionConnected
 			s.mu.Unlock()
 		}
 		return out, err
@@ -732,18 +735,21 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 
 // DataDisconnect tears down RNDIS or MBIM session.
 func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, error) {
-	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	mode, err := domain.ParseDataMode(string(req.Mode))
+	if err != nil {
+		return "", err
+	}
 	iface := strings.TrimSpace(req.Iface)
 	s.mu.RLock()
 	if iface == "" {
-		if mode == domain.DataModeRNDIS || mode == "net" || mode == "" {
+		if mode == domain.DataModeRNDIS || mode == domain.DataModeAuto {
 			iface = s.selectedNet
-			if mode == "" && iface != "" {
+			if mode == domain.DataModeAuto && iface != "" {
 				mode = domain.DataModeRNDIS
 			}
 		}
-		if iface == "" || mode == domain.DataModeMBIM {
-			if s.selectedMBIM != "" && (mode == domain.DataModeMBIM || mode == "") {
+		if iface == "" || mode == domain.DataModeMBIM || mode == domain.DataModeAuto {
+			if s.selectedMBIM != "" && (mode == domain.DataModeMBIM || mode == domain.DataModeAuto) {
 				iface = s.selectedMBIM
 				mode = domain.DataModeMBIM
 			}
@@ -761,7 +767,7 @@ func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, er
 		}
 		out, err := s.net.DisconnectRNDIS(iface)
 		s.mu.Lock()
-		s.status.WAN.Session = "disconnected"
+		s.status.WAN.Session = domain.WANSessionDisconnected
 		s.status.WAN.Method = ""
 		s.mu.Unlock()
 		return out, err
@@ -776,10 +782,10 @@ func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, er
 }
 
 // connectRNDIS activates the PDP context, then DHCP, then static CGPADDR fallback.
-func (s *ModemService) connectRNDIS(iface, method string, cid int) (string, error) {
-	method = strings.ToLower(strings.TrimSpace(method))
-	if method == "" {
-		method = domain.DataMethodAuto
+func (s *ModemService) connectRNDIS(iface string, rawMethod domain.DataMethod, cid int) (string, error) {
+	method, err := domain.ParseDataMethod(string(rawMethod))
+	if err != nil {
+		return "", err
 	}
 	if cid <= 0 {
 		cid = appdefaults.DefaultCID
@@ -818,7 +824,7 @@ func (s *ModemService) connectRNDIS(iface, method string, cid int) (string, erro
 		notes = append(notes, strings.TrimSpace(out))
 		addrs := s.net.IfaceAddrs(iface)
 		if err == nil && (len(addrs) > 0 || !tryStatic || pdp.IP == "") {
-			s.setWANMethod(domain.DataMethodDHCP)
+			s.setWANMethod(domain.WANMethodDHCP)
 			return strings.TrimSpace(strings.Join(notes, "\n")), nil
 		}
 		if err != nil {
@@ -840,11 +846,11 @@ func (s *ModemService) connectRNDIS(iface, method string, cid int) (string, erro
 	if err != nil {
 		return strings.TrimSpace(strings.Join(notes, "\n")), err
 	}
-	s.setWANMethod(domain.DataMethodStatic)
+	s.setWANMethod(domain.WANMethodStatic)
 	return strings.TrimSpace(strings.Join(notes, "\n")), nil
 }
 
-func (s *ModemService) setWANMethod(method string) {
+func (s *ModemService) setWANMethod(method domain.WANMethod) {
 	s.mu.Lock()
 	s.status.WAN.Method = method
 	s.mu.Unlock()
