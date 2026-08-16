@@ -1031,9 +1031,13 @@ function hotspotFormBody() {
         ssid: (document.getElementById('hotspot-ssid') || {}).value || '',
         wlan_iface: (document.getElementById('hotspot-wlan') || {}).value || '',
         channel: parseInt((document.getElementById('hotspot-channel') || {}).value || '6', 10),
-        band: '2.4',
-        lan_cidr: '192.168.50.1/24'
+        band: (lastHotspot && lastHotspot.config && lastHotspot.config.band) || '2.4',
+        lan_cidr: (lastHotspot && lastHotspot.config && lastHotspot.config.lan_cidr) || '192.168.50.1/24'
     };
+    if (lastHotspot && lastHotspot.config) {
+        if (lastHotspot.config.country) body.country = lastHotspot.config.country;
+        if (lastHotspot.config.uplink_iface) body.uplink_iface = lastHotspot.config.uplink_iface;
+    }
     const pass = (document.getElementById('hotspot-password') || {}).value || '';
     if (pass) body.password = pass;
     return body;

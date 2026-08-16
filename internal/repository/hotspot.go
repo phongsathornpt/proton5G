@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,13 +20,15 @@ import (
 type HotspotManager struct {
 	runtimeDir string
 
-	mu         sync.Mutex
-	hostapdCmd *exec.Cmd
-	dnsmasqCmd *exec.Cmd
-	wlan       string
-	uplink     string
-	lanCIDR    string
-	running    bool
+	mu                sync.Mutex
+	hostapdCmd        *exec.Cmd
+	dnsmasqCmd        *exec.Cmd
+	wlan              string
+	uplink            string
+	lanCIDR           string
+	running           bool
+	forwardingChanged bool
+	forwardingPrev    string
 }
 
 // NewHotspotManager builds a manager writing conf under runtimeDir.
@@ -40,7 +43,15 @@ func NewHotspotManager(runtimeDir string) *HotspotManager {
 func (h *HotspotManager) IsRunning() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.running
+	if !h.running {
+		return false
+	}
+	if !processAlive(h.hostapdCmd) || !processAlive(h.dnsmasqCmd) {
+		log.Printf("[WARN] Hotspot daemon exited; cleaning up stale AP state")
+		_, _ = h.stopLocked()
+		return false
+	}
+	return true
 }
 
 // StatusExtras returns current LAN/uplink addresses and best-effort clients.
@@ -123,14 +134,15 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 		return strings.Join(logParts, "\n"), err
 	}
 
-	// Enable forwarding
-	if o, err := runCmd(2*time.Second, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
-		appendLog("sysctl forward: " + err.Error())
+	// Enable forwarding and remember the previous host value so Stop/rollback can restore it.
+	if o, err := h.enableForwardingLocked(); err != nil {
+		h.cleanupPartialLocked(cfg.WlanIface)
+		return strings.Join(logParts, "\n"), fmt.Errorf("enable forwarding: %w", err)
 	} else {
 		appendLog(o)
 	}
 
-	if err := h.applyNATLocked(cfg.WlanIface, uplink); err != nil {
+	if err := h.applyNATLocked(cfg.WlanIface, uplink, cfg.LANCIDR); err != nil {
 		h.cleanupPartialLocked(cfg.WlanIface)
 		return strings.Join(logParts, "\n"), fmt.Errorf("nat: %w", err)
 	}
@@ -148,7 +160,7 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 		if hLogFile != nil {
 			_ = hLogFile.Close()
 		}
-		_ = h.removeNATLocked(cfg.WlanIface, uplink)
+		_ = h.removeNATLocked(cfg.WlanIface, uplink, cfg.LANCIDR)
 		h.cleanupPartialLocked(cfg.WlanIface)
 		return strings.Join(logParts, "\n"), fmt.Errorf("hostapd start: %w", err)
 	}
@@ -159,11 +171,15 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 			if hLogFile != nil {
 				_ = hLogFile.Close()
 			}
-			_ = h.removeNATLocked(cfg.WlanIface, uplink)
+			_ = h.removeNATLocked(cfg.WlanIface, uplink, cfg.LANCIDR)
 			h.cleanupPartialLocked(cfg.WlanIface)
 			return strings.Join(logParts, "\n"), fmt.Errorf("hostapd exited immediately: %s", tailFile(hostapdLog, 1200))
 		}
 	}
+	if hLogFile != nil {
+		_ = hLogFile.Close()
+	}
+	go func() { _ = hCmd.Wait() }()
 
 	// dnsmasq foreground-ish: --keep-in-foreground if supported, else -d
 	dnsmasqLog := filepath.Join(h.runtimeDir, "dnsmasq.log")
@@ -191,14 +207,15 @@ func (h *HotspotManager) Start(cfg domain.HotspotConfig, uplink string) (string,
 				_ = dLogFile.Close()
 			}
 			_ = killProcessGroup(hCmd)
-			_ = h.removeNATLocked(cfg.WlanIface, uplink)
+			_ = h.removeNATLocked(cfg.WlanIface, uplink, cfg.LANCIDR)
 			h.cleanupPartialLocked(cfg.WlanIface)
 			return strings.Join(logParts, "\n"), fmt.Errorf("dnsmasq start: %v / %v; %s", err, err2, tailFile(dnsmasqLog, 800))
 		}
 	}
 
-	// Reap in background so Wait is not required for Stop
-	go func() { _ = hCmd.Wait() }()
+	if dLogFile != nil {
+		_ = dLogFile.Close()
+	}
 	go func() { _ = dCmd.Wait() }()
 
 	h.hostapdCmd = hCmd
@@ -237,12 +254,15 @@ func (h *HotspotManager) stopLocked() (string, error) {
 		h.hostapdCmd = nil
 	}
 	if h.wlan != "" && h.uplink != "" {
-		if err := h.removeNATLocked(h.wlan, h.uplink); err != nil {
+		if err := h.removeNATLocked(h.wlan, h.uplink, h.lanCIDR); err != nil {
 			parts = append(parts, "nat: "+err.Error())
 		}
 	}
 	if h.wlan != "" {
 		_, _ = runCmd(3*time.Second, "ip", "addr", "flush", "dev", h.wlan)
+	}
+	if err := h.restoreForwardingLocked(); err != nil {
+		parts = append(parts, "forwarding: "+err.Error())
 	}
 	h.running = false
 	wlan, up := h.wlan, h.uplink
@@ -258,25 +278,72 @@ func (h *HotspotManager) cleanupPartialLocked(wlan string) {
 	if wlan != "" {
 		_, _ = runCmd(3*time.Second, "ip", "addr", "flush", "dev", wlan)
 	}
+	_ = h.restoreForwardingLocked()
 }
 
-func (h *HotspotManager) applyNATLocked(wlan, uplink string) error {
+func (h *HotspotManager) enableForwardingLocked() (string, error) {
+	prevRaw, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		return "", err
+	}
+	prev := strings.TrimSpace(string(prevRaw))
+	h.forwardingPrev = prev
+	h.forwardingChanged = false
+	if prev == "1" {
+		return "", nil
+	}
+	out, err := runCmd(2*time.Second, "sysctl", "-w", "net.ipv4.ip_forward=1")
+	if err != nil {
+		return out, err
+	}
+	h.forwardingChanged = true
+	return out, nil
+}
+
+func (h *HotspotManager) restoreForwardingLocked() error {
+	if !h.forwardingChanged {
+		h.forwardingPrev = ""
+		return nil
+	}
+	prev := h.forwardingPrev
+	h.forwardingChanged = false
+	h.forwardingPrev = ""
+	if prev == "" {
+		prev = "0"
+	}
+	_, err := runCmd(2*time.Second, "sysctl", "-w", "net.ipv4.ip_forward="+prev)
+	return err
+}
+
+func hotspotLANNetwork(lanCIDR string) (string, error) {
+	_, network, err := net.ParseCIDR(strings.TrimSpace(lanCIDR))
+	if err != nil || network == nil || network.IP.To4() == nil {
+		return "", fmt.Errorf("invalid hotspot LAN CIDR %q", lanCIDR)
+	}
+	return network.String(), nil
+}
+
+func (h *HotspotManager) applyNATLocked(wlan, uplink, lanCIDR string) error {
+	lanNetwork, err := hotspotLANNetwork(lanCIDR)
+	if err != nil {
+		return err
+	}
 	if lookPath("nft") {
-		// Fresh table each start
+		// Fresh table each start. Rules are scoped to this AP subnet and interfaces.
 		_, _ = runCmd(3*time.Second, "nft", "delete", "table", "ip", "fm350_hotspot")
 		script := fmt.Sprintf(`
 table ip fm350_hotspot {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
-    oifname "%s" masquerade
+    ip saddr %s oifname "%s" masquerade
   }
   chain forward {
     type filter hook forward priority filter; policy accept;
-    ct state established,related accept
-    iifname "%s" oifname "%s" accept
+    iifname "%s" oifname "%s" ip saddr %s accept
+    iifname "%s" oifname "%s" ip daddr %s ct state established,related accept
   }
 }
-`, uplink, wlan, uplink)
+`, lanNetwork, uplink, wlan, uplink, lanNetwork, uplink, wlan, lanNetwork)
 		cmd := exec.Command("nft", "-f", "-")
 		cmd.Stdin = strings.NewReader(script)
 		var stderr strings.Builder
@@ -288,20 +355,20 @@ table ip fm350_hotspot {
 	}
 	// iptables fallback with marked rules
 	rules := [][]string{
-		{"-t", "nat", "-A", "POSTROUTING", "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "MASQUERADE"},
-		{"-A", "FORWARD", "-m", "comment", "--comment", "fm350_hotspot", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		{"-A", "FORWARD", "-i", wlan, "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "ACCEPT"},
+		{"-t", "nat", "-A", "POSTROUTING", "-s", lanNetwork, "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "MASQUERADE"},
+		{"-A", "FORWARD", "-i", wlan, "-o", uplink, "-s", lanNetwork, "-m", "comment", "--comment", "fm350_hotspot", "-j", "ACCEPT"},
+		{"-A", "FORWARD", "-i", uplink, "-o", wlan, "-d", lanNetwork, "-m", "comment", "--comment", "fm350_hotspot", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 	}
 	for _, r := range rules {
 		if _, err := runCmd(3*time.Second, "iptables", r...); err != nil {
-			_ = h.removeNATLocked(wlan, uplink)
+			_ = h.removeNATLocked(wlan, uplink, lanCIDR)
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *HotspotManager) removeNATLocked(wlan, uplink string) error {
+func (h *HotspotManager) removeNATLocked(wlan, uplink, lanCIDR string) error {
 	if lookPath("nft") {
 		_, err := runCmd(3*time.Second, "nft", "delete", "table", "ip", "fm350_hotspot")
 		// ignore missing table
@@ -310,11 +377,15 @@ func (h *HotspotManager) removeNATLocked(wlan, uplink string) error {
 		}
 		return nil
 	}
-	// Best-effort delete by comment is awkward; delete exact reverse of add.
+	lanNetwork, err := hotspotLANNetwork(lanCIDR)
+	if err != nil {
+		return err
+	}
+	// Delete the exact scoped rules added by applyNATLocked.
 	dels := [][]string{
-		{"-t", "nat", "-D", "POSTROUTING", "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "MASQUERADE"},
-		{"-D", "FORWARD", "-m", "comment", "--comment", "fm350_hotspot", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		{"-D", "FORWARD", "-i", wlan, "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "ACCEPT"},
+		{"-t", "nat", "-D", "POSTROUTING", "-s", lanNetwork, "-o", uplink, "-m", "comment", "--comment", "fm350_hotspot", "-j", "MASQUERADE"},
+		{"-D", "FORWARD", "-i", wlan, "-o", uplink, "-s", lanNetwork, "-m", "comment", "--comment", "fm350_hotspot", "-j", "ACCEPT"},
+		{"-D", "FORWARD", "-i", uplink, "-o", wlan, "-d", lanNetwork, "-m", "comment", "--comment", "fm350_hotspot", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 	}
 	for _, r := range dels {
 		_, _ = runCmd(3*time.Second, "iptables", r...)
@@ -344,6 +415,9 @@ func (h *HotspotManager) preflight(cfg domain.HotspotConfig, uplink string) erro
 	if !isWirelessIface(cfg.WlanIface) {
 		return fmt.Errorf("wlan %s is not a wireless interface", cfg.WlanIface)
 	}
+	if addrs := NetIfaceAddrs(cfg.WlanIface); len(addrs) > 0 {
+		return fmt.Errorf("wlan %s already has IPv4 address %s; disconnect/unmanage it before starting hotspot", cfg.WlanIface, strings.Join(addrs, ", "))
+	}
 	if tools.Iw {
 		phy := wirelessPhy(cfg.WlanIface)
 		_, ap := wifiAPModes(phy, cfg.WlanIface)
@@ -372,6 +446,16 @@ func tailFile(path string, max int) string {
 	return s
 }
 
+func processAlive(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return false
+	}
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+		return false
+	}
+	return cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
 func killProcessGroup(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
@@ -382,20 +466,17 @@ func killProcessGroup(cmd *exec.Cmd) error {
 	} else {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 	}
-	done := make(chan struct{})
-	go func() {
-		_, _ = cmd.Process.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(2 * time.Second):
-		if err == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			_ = cmd.Process.Kill()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(cmd) {
+			return nil
 		}
-		return nil
+		time.Sleep(50 * time.Millisecond)
 	}
+	if err == nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	} else {
+		_ = cmd.Process.Kill()
+	}
+	return nil
 }
