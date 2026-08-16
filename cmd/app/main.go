@@ -154,6 +154,7 @@ func main() {
 					if err := hist.SaveFile(path); err != nil {
 						log.Printf("[WARN] Save history: %v", err)
 					}
+				}
 			}
 		})
 	}
