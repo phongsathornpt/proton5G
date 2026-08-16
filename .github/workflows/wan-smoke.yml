@@ -1,0 +1,10 @@
+name: WAN runner smoke
+on:
+  push:
+    branches: [fix/wan-data-path]
+    paths: [.github/workflows/wan-smoke.yml]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo runner-ok
