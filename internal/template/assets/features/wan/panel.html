@@ -43,7 +43,8 @@
             <div class="form-group mt-15">
                 <label for="wan-method-select">RNDIS address</label>
                 <select id="wan-method-select">
-                    <option value="auto">Auto (DHCP)</option>
+                    <option value="auto">Auto (modem config, then DHCP)</option>
+                    <option value="static">Modem-reported static</option>
                     <option value="dhcp">DHCP only</option>
                 </select>
             </div>
@@ -52,7 +53,7 @@
                 <button type="button" onclick="dataDisconnect()">Disconnect</button>
                 <button type="button" onclick="refreshModems()">Refresh</button>
             </div>
-            <p class="hint" id="data-hint">RNDIS uses DHCP. For MBIM, select the cdc-wdm control endpoint; its host net interface is part of that MBIM data path and is not a second RNDIS endpoint. PDP IP/DNS are modem telemetry only—the manager no longer invents a /24 subnet or .1 gateway from CGPADDR.</p>
+            <p class="hint" id="data-hint">RNDIS Auto activates the PDP context and uses AT+CGCONTRDP when the modem reports an IPv4 address with subnet mask and gateway; DHCP is the fallback. Static requires those modem-reported parameters. AT+CGPADDR remains address telemetry only and is never used to invent a prefix or gateway. MBIM remains a separate data path.</p>
         </section>
     </div>
 </section>

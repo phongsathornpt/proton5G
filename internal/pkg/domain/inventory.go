@@ -42,13 +42,13 @@ func ParseDataMode(raw string) (DataMode, error) {
 	}
 }
 
-// DataMethod controls RNDIS address configuration.
+// DataMethod controls host-side RNDIS address configuration.
 type DataMethod string
 
 const (
-	DataMethodAuto   DataMethod = "auto" // DHCP, then PDP static from CGPADDR
-	DataMethodDHCP   DataMethod = "dhcp"
-	DataMethodStatic DataMethod = "static"
+	DataMethodAuto   DataMethod = "auto"   // modem-reported PDP config, then DHCP fallback
+	DataMethodDHCP   DataMethod = "dhcp"   // DHCP only
+	DataMethodStatic DataMethod = "static" // require modem-reported address/prefix/gateway
 )
 
 // ParseDataMethod validates and normalizes RNDIS address methods.

@@ -117,13 +117,13 @@ type CAComponent struct {
 	SINR      int    `json:"sinr,omitempty"`
 }
 
-// PDPSession is the active PDP address/DNS from AT+CGPADDR / AT+GTDNS.
+// PDPSession is active PDP telemetry. Gateway is populated only when a protocol reports it.
 type PDPSession struct {
 	CID     int    `json:"cid,omitempty"`
 	IP      string `json:"ip,omitempty"`
 	DNS1    string `json:"dns1,omitempty"`
 	DNS2    string `json:"dns2,omitempty"`
-	Gateway string `json:"gateway,omitempty"` // guessed .1; not from AT
+	Gateway string `json:"gateway,omitempty"` // protocol-reported; never inferred from PDP IP
 }
 
 // WANMethod is the address method currently used by the host-side WAN.
