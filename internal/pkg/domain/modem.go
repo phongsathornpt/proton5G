@@ -98,7 +98,7 @@ type CAComponent struct {
 	ULARFCN   string `json:"ul_arfcn,omitempty"`    // UL EARFCN / NR-ARFCN
 	DLBW      string `json:"dl_bandwidth,omitempty"`
 	ULBW      string `json:"ul_bandwidth,omitempty"`
-	DLMIMO    string `json:"dl_mimo,omitempty"`      // e.g. 2x2, 4x4; active network layer count
+	DLMIMO    string `json:"dl_mimo,omitempty"` // e.g. 2x2, 4x4; active network layer count
 	ULMIMO    string `json:"ul_mimo,omitempty"`
 	DLMod     string `json:"dl_modulation,omitempty"`
 	ULMod     string `json:"ul_modulation,omitempty"`
@@ -145,18 +145,19 @@ type ATPoll struct {
 
 // FullStatus aggregates all modem metrics for WebUI and SSE.
 type FullStatus struct {
-	Modem        ModemStatus   `json:"modem"`
-	Signal       SignalInfo    `json:"signal"`
-	Network      NetworkInfo   `json:"network"`
-	SIM          SIMInfo       `json:"sim"`
-	APN          APNConfig     `json:"apn"`
-	RATMode      RATMode       `json:"rat_mode"`
-	Identity     ModemIdentity `json:"identity,omitempty"`
-	TemperatureC float64       `json:"temperature_c,omitempty"`
-	Cells        []CellInfo    `json:"cells,omitempty"`
-	CA           []CAComponent `json:"ca,omitempty"`
-	PDP          PDPSession    `json:"pdp,omitempty"`
-	WAN          WANInfo       `json:"wan,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	UpdatedAt    time.Time     `json:"updated_at,omitempty"` // last successful poll (or last error update)
+	Modem            ModemStatus      `json:"modem"`
+	Signal           SignalInfo       `json:"signal"`
+	Network          NetworkInfo      `json:"network"`
+	SIM              SIMInfo          `json:"sim"`
+	APN              APNConfig        `json:"apn"`
+	RATMode          RATMode          `json:"rat_mode"`
+	Identity         ModemIdentity    `json:"identity,omitempty"`
+	TemperatureC     float64          `json:"temperature_c,omitempty"`
+	Cells            []CellInfo       `json:"cells,omitempty"`
+	CA               []CAComponent    `json:"ca,omitempty"`
+	DownlinkCapacity DownlinkCapacity `json:"downlink_capacity"`
+	PDP              PDPSession       `json:"pdp,omitempty"`
+	WAN              WANInfo          `json:"wan,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	UpdatedAt        time.Time        `json:"updated_at,omitempty"` // last successful poll (or last error update)
 }
