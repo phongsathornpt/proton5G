@@ -68,12 +68,6 @@ func validateFM350RNDISIfaceAt(classNetRoot, iface string) error {
 	}
 }
 
-// netIfaceDeviceDriver reports the bound kernel driver for a host net interface.
-// Empty means unavailable. It is intentionally best-effort telemetry only.
-func netIfaceDeviceDriver(iface string) string {
-	return netIfaceDeviceDriverAt(sysClassNetRoot, iface)
-}
-
 func netIfaceDeviceDriverAt(classNetRoot, iface string) string {
 	if !validIfaceName(iface) {
 		return ""

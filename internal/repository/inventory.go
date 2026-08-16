@@ -201,16 +201,6 @@ func uniqueSorted(in []string) []string {
 	return out
 }
 
-// ProbeATPortCached returns whether path answers AT, with a short TTL cache.
-// skipPath is the currently open AT port (assumed usable; not re-probed).
-func ProbeATPortCached(path, skipPath string) bool {
-	if path == "" {
-		return false
-	}
-	m := ProbeATPortsCached([]string{path}, skipPath)
-	return m[path]
-}
-
 // ProbeATPortsCached probes many serial paths concurrently (bounded), using the
 // same TTL cache as ProbeATPortCached. Distinct tty nodes open independently;
 // skipPath (manager's open AT port) is never opened (assumed ready).
@@ -516,50 +506,4 @@ func buildNetIfacesParallel(nets []string) []domain.ModemInterface {
 	}
 	wg.Wait()
 	return out
-}
-
-// FindModem returns modem by id from a list.
-func FindModem(modems []domain.ModemDevice, id string) (domain.ModemDevice, bool) {
-	for _, m := range modems {
-		if m.ID == id {
-			return m, true
-		}
-	}
-	return domain.ModemDevice{}, false
-}
-
-// ModemHasATPort reports whether path is listed under modem.
-func ModemHasATPort(m domain.ModemDevice, path string) bool {
-	for _, p := range m.ATPorts {
-		if p.Path == path {
-			return true
-		}
-	}
-	return false
-}
-
-// ModemHasMBIM reports whether path is listed under modem.
-func ModemHasMBIM(m domain.ModemDevice, path string) bool {
-	for _, p := range m.MBIMNodes {
-		if p.Path == path {
-			return true
-		}
-	}
-	return false
-}
-
-// PreferredATPort picks best AT path for a modem.
-func PreferredATPort(m domain.ModemDevice, preferred string) string {
-	if preferred != "" && ModemHasATPort(m, preferred) {
-		return preferred
-	}
-	for _, p := range m.ATPorts {
-		if p.ATReady {
-			return p.Path
-		}
-	}
-	if len(m.ATPorts) > 0 {
-		return m.ATPorts[0].Path
-	}
-	return ""
 }

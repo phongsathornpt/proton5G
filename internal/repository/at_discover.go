@@ -120,14 +120,3 @@ func DiscoverATPort(vendor, product string) (string, error) {
 	// often GNSS/log. Poller will rediscover when permissions or USB change.
 	return "", nil
 }
-
-// DiscoverATPortPrefer keeps preferred if it still answers AT; otherwise rediscovers.
-func DiscoverATPortPrefer(vendor, product, preferred string) (string, error) {
-	if preferred != "" {
-		// Single-path check (uses cache when warm).
-		if ProbeATPortCached(preferred, "") {
-			return preferred, nil
-		}
-	}
-	return DiscoverATPort(vendor, product)
-}

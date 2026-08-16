@@ -69,15 +69,3 @@ func GenerateDnsmasqConf(cfg domain.HotspotConfig, dhcpStart, dhcpEnd, leaseFile
 	b.WriteString("log-dhcp\n")
 	return b.String(), nil
 }
-
-// LANGatewayIP returns the host address from lan_cidr (e.g. 192.168.50.1).
-func LANGatewayIP(lanCIDR string) (string, error) {
-	ip, _, err := net.ParseCIDR(lanCIDR)
-	if err != nil {
-		return "", err
-	}
-	if ip.To4() == nil {
-		return "", fmt.Errorf("not IPv4")
-	}
-	return ip.String(), nil
-}
