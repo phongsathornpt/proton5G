@@ -20,6 +20,10 @@ func (c *TieredClient) QueryPDP(cid int) (domain.PDPSession, error) {
 	if err != nil {
 		return sess, err
 	}
+	// AT+CGPADDR reports an address, not a subnet/gateway contract. The base
+	// client retains its legacy parser for compatibility, but the production
+	// tiered path must not expose the guessed .1 gateway as authoritative.
+	sess.Gateway = ""
 	c.cacheMu.Lock()
 	c.cache.pdp = sess
 	c.cache.mediumAt = c.now()

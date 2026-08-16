@@ -243,17 +243,14 @@ func (c *TieredClient) refreshMedium(cache *tieredPollCache) {
 	}
 	pdp := cache.pdp
 	pdp.CID = cid
+	// A successful query with no usable address/DNS means the bearer state was
+	// cleared. Preserve old values only when the AT command itself fails.
 	if resp, err := c.send(CmdCGPADDR(cid)); err == nil {
-		if ip := ParseCGPADDR(resp); ip != "" {
-			pdp.IP = ip
-			pdp.Gateway = GuessIPv4Gateway(ip)
-		}
+		pdp.IP = ParseCGPADDR(resp)
+		pdp.Gateway = ""
 	}
 	if resp, err := c.send(CmdGTDNS(cid)); err == nil {
-		dns1, dns2 := ParseGTDNS(resp)
-		if dns1 != "" || dns2 != "" {
-			pdp.DNS1, pdp.DNS2 = dns1, dns2
-		}
+		pdp.DNS1, pdp.DNS2 = ParseGTDNS(resp)
 	}
 	cache.pdp = pdp
 }

@@ -37,15 +37,14 @@
                 <div class="info-item"><span>Up rate:</span> <strong id="wan-tx-rate">-</strong></div>
             </div>
             <div class="form-group mt-15">
-                <label for="data-iface-select">Data interface</label>
+                <label for="data-iface-select">Data endpoint</label>
                 <select id="data-iface-select"></select>
             </div>
             <div class="form-group mt-15">
                 <label for="wan-method-select">RNDIS address</label>
                 <select id="wan-method-select">
-                    <option value="auto">Auto (DHCP, then PDP static)</option>
+                    <option value="auto">Auto (DHCP)</option>
                     <option value="dhcp">DHCP only</option>
-                    <option value="static">PDP static only (CGPADDR)</option>
                 </select>
             </div>
             <div class="button-group mt-15">
@@ -53,7 +52,7 @@
                 <button type="button" onclick="dataDisconnect()">Disconnect</button>
                 <button type="button" onclick="refreshModems()">Refresh</button>
             </div>
-            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM. Auto tries DHCP first, then paints the PDP IPv4 from AT+CGPADDR onto the iface. Does not rewrite /etc/resolv.conf.</p>
+            <p class="hint" id="data-hint">RNDIS uses DHCP. For MBIM, select the cdc-wdm control endpoint; its host net interface is part of that MBIM data path and is not a second RNDIS endpoint. PDP IP/DNS are modem telemetry only—the manager no longer invents a /24 subnet or .1 gateway from CGPADDR.</p>
         </section>
     </div>
 </section>

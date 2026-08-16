@@ -13,24 +13,24 @@ import (
 
 // NetLinkUp brings a network interface administratively up.
 func NetLinkUp(iface string) (string, error) {
-	if iface == "" {
-		return "", fmt.Errorf("network interface name is empty")
+	if !validIfaceName(iface) {
+		return "", fmt.Errorf("invalid network interface name %q", iface)
 	}
 	return runCmd(5*time.Second, "ip", "link", "set", "dev", iface, "up")
 }
 
 // NetLinkDown brings a network interface down.
 func NetLinkDown(iface string) (string, error) {
-	if iface == "" {
-		return "", fmt.Errorf("network interface name is empty")
+	if !validIfaceName(iface) {
+		return "", fmt.Errorf("invalid network interface name %q", iface)
 	}
 	return runCmd(5*time.Second, "ip", "link", "set", "dev", iface, "down")
 }
 
 // NetDHCP tries dhclient then dhcpcd to obtain an address.
 func NetDHCP(iface string) (string, error) {
-	if iface == "" {
-		return "", fmt.Errorf("network interface name is empty")
+	if !validIfaceName(iface) {
+		return "", fmt.Errorf("invalid network interface name %q", iface)
 	}
 	// Prefer dhclient -v for readable output; fall back to dhcpcd.
 	if _, err := exec.LookPath("dhclient"); err == nil {
@@ -59,24 +59,28 @@ func ConnectRNDIS(iface string) (string, error) {
 	return combined, nil
 }
 
-// ConnectRNDISStatic brings the iface up and assigns a PDP IPv4 (/24 if no prefix).
-// Optional gateway adds a default route at metric 100 (does not rewrite resolv.conf).
+// ConnectRNDISStatic applies explicit host network parameters. The address must
+// include its CIDR prefix; this helper never guesses a prefix or gateway.
 func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {
 	if !validIfaceName(iface) {
-		return "", fmt.Errorf("invalid network interface name")
+		return "", fmt.Errorf("invalid network interface name %q", iface)
 	}
 	addrCIDR = strings.TrimSpace(addrCIDR)
-	if addrCIDR == "" {
-		return "", fmt.Errorf("static address is empty")
+	slash := strings.Index(addrCIDR, "/")
+	if slash <= 0 || slash == len(addrCIDR)-1 {
+		return "", fmt.Errorf("static address must include an explicit CIDR prefix")
 	}
-	ip := addrCIDR
-	if i := strings.Index(addrCIDR, "/"); i > 0 {
-		ip = addrCIDR[:i]
-	} else {
-		addrCIDR += "/24"
-	}
+	ip := addrCIDR[:slash]
 	if !isIPv4Addr(ip) || ip == "0.0.0.0" {
 		return "", fmt.Errorf("invalid IPv4 address %q", ip)
+	}
+	prefix, err := strconv.Atoi(addrCIDR[slash+1:])
+	if err != nil || prefix < 0 || prefix > 32 {
+		return "", fmt.Errorf("invalid IPv4 prefix in %q", addrCIDR)
+	}
+	gateway = strings.TrimSpace(gateway)
+	if gateway != "" && !isIPv4Addr(gateway) {
+		return "", fmt.Errorf("invalid IPv4 gateway %q", gateway)
 	}
 
 	upOut, err := NetLinkUp(iface)
@@ -85,28 +89,17 @@ func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {
 	}
 	parts := []string{upOut}
 
-	already := false
-	for _, a := range NetIfaceAddrs(iface) {
-		if a == ip {
-			already = true
-			break
-		}
-	}
-	if !already {
-		o, addErr := runCmd(5*time.Second, "ip", "addr", "add", addrCIDR, "dev", iface)
-		parts = append(parts, o)
-		if addErr != nil && !strings.Contains(o, "File exists") {
-			return strings.TrimSpace(strings.Join(parts, "\n")), fmt.Errorf("ip addr add: %w", addErr)
-		}
+	o, addErr := runCmd(5*time.Second, "ip", "addr", "replace", addrCIDR, "dev", iface)
+	parts = append(parts, o)
+	if addErr != nil {
+		return strings.TrimSpace(strings.Join(parts, "\n")), fmt.Errorf("ip addr replace: %w", addErr)
 	}
 
-	gateway = strings.TrimSpace(gateway)
-	if gateway != "" && isIPv4Addr(gateway) {
-		o, rtErr := runCmd(5*time.Second, "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "100")
+	if gateway != "" {
+		o, routeErr := runCmd(5*time.Second, "ip", "route", "replace", "default", "via", gateway, "dev", iface, "metric", "100")
 		parts = append(parts, o)
-		if rtErr != nil && !strings.Contains(o, "File exists") && !strings.Contains(rtErr.Error(), "File exists") {
-			// Route is best-effort; address assignment still counts as success.
-			parts = append(parts, "default route: "+rtErr.Error())
+		if routeErr != nil {
+			return strings.TrimSpace(strings.Join(parts, "\n")), fmt.Errorf("default route: %w", routeErr)
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n")), nil
@@ -114,8 +107,8 @@ func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {
 
 // DisconnectRNDIS releases DHCP if possible, flushes addresses, and sets link down.
 func DisconnectRNDIS(iface string) (string, error) {
-	if iface == "" {
-		return "", fmt.Errorf("network interface name is empty")
+	if !validIfaceName(iface) {
+		return "", fmt.Errorf("invalid network interface name %q", iface)
 	}
 	var parts []string
 	if _, err := exec.LookPath("dhclient"); err == nil {
@@ -169,7 +162,7 @@ func validIfaceName(s string) bool {
 // NetIfaceAddrs returns IPv4 addresses currently configured on iface (via `ip`).
 // Empty slice if unknown / down / no tool.
 func NetIfaceAddrs(iface string) []string {
-	if iface == "" {
+	if !validIfaceName(iface) {
 		return nil
 	}
 	if _, err := exec.LookPath("ip"); err != nil {

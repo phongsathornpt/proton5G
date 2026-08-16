@@ -120,6 +120,7 @@ func main() {
 	if err := svc.LoadHotspotConfigFile(); err != nil {
 		log.Printf("[WARN] Load hotspot config: %v", err)
 	}
+	wanSvc := usecase.NewWANService(svc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -159,7 +160,7 @@ func main() {
 		})
 	}
 
-	httpHandler := handler.NewServer(svc, token)
+	httpHandler := handler.NewServer(wanSvc, token)
 	startBG("sse-hub", func() { httpHandler.Run(ctx) })
 
 	addr := fmt.Sprintf("%s:%d", *bind, *port)
