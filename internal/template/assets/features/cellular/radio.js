@@ -106,8 +106,108 @@ function fillUplinkCASummary(ca) {
     setText('ul-ca-modulation', joinCarrierField(displayCarriers, 'ul_modulation'));
 }
 
+function initDownlinkCapacityUI() {
+    if (document.getElementById('dl-cap-estimate')) return;
+
+    const panel = document.getElementById('panel-cellular');
+    if (!panel) return;
+    const grid = panel.querySelector('.grid');
+    if (!grid) return;
+
+    const card = document.createElement('section');
+    card.className = 'card full-width dl-capacity-card';
+    card.setAttribute('aria-label', 'Downlink capacity estimate');
+    card.innerHTML = `
+        <h2>Downlink capacity</h2>
+        <div class="dl-capacity-hero">
+            <div class="dl-capacity-primary">
+                <span class="dl-capacity-eyebrow">Live radio ceiling estimate</span>
+                <strong id="dl-cap-estimate">Waiting for radio data</strong>
+                <span id="dl-cap-confidence" class="dl-cap-state idle" aria-live="polite">No CA telemetry</span>
+            </div>
+            <div class="dl-capacity-device">
+                <span>FM350-GL device ceiling</span>
+                <strong id="dl-cap-device">4.67 Gbps</strong>
+            </div>
+        </div>
+        <div class="dl-capacity-grid">
+            <div class="dl-capacity-metric"><span>DL carriers</span><strong id="dl-cap-carriers">—</strong></div>
+            <div class="dl-capacity-metric"><span>Total bandwidth</span><strong id="dl-cap-bandwidth">—</strong></div>
+            <div class="dl-capacity-metric"><span>LTE / NR bandwidth</span><strong id="dl-cap-rat-bandwidth">—</strong></div>
+            <div class="dl-capacity-metric"><span>Bands</span><strong id="dl-cap-bands">—</strong></div>
+            <div class="dl-capacity-metric"><span>Best DL MIMO</span><strong id="dl-cap-mimo">—</strong></div>
+            <div class="dl-capacity-metric"><span>Best DL modulation</span><strong id="dl-cap-modulation">—</strong></div>
+            <div class="dl-capacity-metric"><span>Estimated limiter</span><strong id="dl-cap-limiter">—</strong></div>
+        </div>
+        <p class="hint" id="dl-cap-note">Waiting for live AT+GTCAINFO carrier telemetry.</p>`;
+
+    const cellsCard = document.getElementById('cells-table');
+    const insertionPoint = cellsCard ? cellsCard.closest('.card') : null;
+    if (insertionPoint) {
+        grid.insertBefore(card, insertionPoint);
+    } else {
+        grid.appendChild(card);
+    }
+}
+
+function formatCapacityMbps(mbps) {
+    const n = Number(mbps || 0);
+    if (!n) return '—';
+    if (n >= 1000) return `${(n / 1000).toFixed(2)} Gbps`;
+    return `${Math.round(n)} Mbps`;
+}
+
+function formatCapacityMHz(mhz) {
+    const n = Number(mhz || 0);
+    if (!n) return '—';
+    return `${Number.isInteger(n) ? n : n.toFixed(1)} MHz`;
+}
+
+function setDownlinkCapacityState(text, kind, title) {
+    const el = document.getElementById('dl-cap-confidence');
+    if (!el) return;
+    el.textContent = text;
+    el.className = `dl-cap-state ${kind || 'idle'}`;
+    el.title = title || text;
+}
+
+function fillDownlinkCapacity(capacity) {
+    const c = capacity || {};
+    const activeCC = Number(c.active_cc || 0);
+    const estimatedCC = Number(c.estimated_from_cc || 0);
+    const peak = Number(c.estimated_peak_mbps || 0);
+
+    setText('dl-cap-estimate', peak ? formatCapacityMbps(peak) : 'Waiting for radio data');
+    setText('dl-cap-device', formatCapacityMbps(c.device_ceiling_mbps || 4670));
+    setText('dl-cap-carriers', activeCC ? `${activeCC} CC · LTE ${c.lte_cc || 0} · NR ${c.nr_cc || 0}` : '—');
+    setText('dl-cap-bandwidth', formatCapacityMHz(c.total_bandwidth_mhz));
+    setText('dl-cap-rat-bandwidth', `LTE ${formatCapacityMHz(c.lte_bandwidth_mhz)} · NR ${formatCapacityMHz(c.nr_bandwidth_mhz)}`);
+    setText('dl-cap-bands', (c.bands || []).length ? c.bands.join(' + ') : '—');
+    setText('dl-cap-mimo', c.best_dl_mimo || '—');
+    setText('dl-cap-modulation', c.best_dl_modulation || '—');
+    setText('dl-cap-limiter', c.limiter || '—');
+
+    if (!activeCC) {
+        setDownlinkCapacityState('No CA telemetry', 'idle', 'Waiting for AT+GTCAINFO carrier data.');
+    } else if (!peak) {
+        setDownlinkCapacityState('Estimate unavailable', 'warn', 'Bandwidth, MIMO, or modulation telemetry is missing for the reported carriers.');
+    } else if (c.estimate_complete) {
+        setDownlinkCapacityState('Live estimate complete', 'ok', `All ${activeCC} reported carriers contributed to the estimate.`);
+    } else {
+        setDownlinkCapacityState(`Partial · ${estimatedCC}/${activeCC} CC`, 'warn', 'Only carriers with known bandwidth, DL MIMO, and DL modulation contribute to the estimate.');
+    }
+
+    const note = document.getElementById('dl-cap-note');
+    if (note) {
+        const method = c.estimate_method || 'Live estimate uses reported bandwidth, DL MIMO, and modulation.';
+        note.textContent = `${method}. This is a radio-side heuristic, not a guaranteed speed; SIM/package caps, TDD slots, scheduler load, RF quality, backhaul and protocol overhead can reduce real throughput.`;
+    }
+}
+
 function fillCATable(ca) {
     fillUplinkCASummary(ca);
+    const capacity = (typeof lastStatus !== 'undefined' && lastStatus) ? lastStatus.downlink_capacity : null;
+    fillDownlinkCapacity(capacity);
     fillTableBody('ca-body', (ca || []).map(c => [
         c.component || '—',
         c.band || '—',
@@ -128,3 +228,5 @@ function fillCATable(ca) {
 }
 
 initUplinkCAUI();
+initDownlinkCapacityUI();
+fillDownlinkCapacity(null);
