@@ -106,6 +106,50 @@ function fillUplinkCASummary(ca) {
     setText('ul-ca-modulation', joinCarrierField(displayCarriers, 'ul_modulation'));
 }
 
+function initDownlinkCapacityUI() {
+    if (document.getElementById('dl-cap-estimate')) return;
+
+    const panel = document.getElementById('panel-cellular');
+    if (!panel) return;
+    const grid = panel.querySelector('.grid');
+    if (!grid) return;
+
+    const card = document.createElement('section');
+    card.className = 'card full-width dl-capacity-card';
+    card.setAttribute('aria-label', 'Downlink capacity estimate');
+    card.innerHTML = `
+        <h2>Downlink capacity</h2>
+        <div class="dl-capacity-hero">
+            <div class="dl-capacity-primary">
+                <span class="dl-capacity-eyebrow">Live radio ceiling estimate</span>
+                <strong id="dl-cap-estimate">Waiting for radio data</strong>
+                <span id="dl-cap-confidence" class="dl-cap-state idle" aria-live="polite">No CA telemetry</span>
+            </div>
+            <div class="dl-capacity-device">
+                <span>FM350-GL device ceiling</span>
+                <strong id="dl-cap-device">4.67 Gbps</strong>
+            </div>
+        </div>
+        <div class="dl-capacity-grid">
+            <div class="dl-capacity-metric"><span>DL carriers</span><strong id="dl-cap-carriers">—</strong></div>
+            <div class="dl-capacity-metric"><span>Total bandwidth</span><strong id="dl-cap-bandwidth">—</strong></div>
+            <div class="dl-capacity-metric"><span>LTE / NR bandwidth</span><strong id="dl-cap-rat-bandwidth">—</strong></div>
+            <div class="dl-capacity-metric"><span>Bands</span><strong id="dl-cap-bands">—</strong></div>
+            <div class="dl-capacity-metric"><span>Best DL MIMO</span><strong id="dl-cap-mimo">—</strong></div>
+            <div class="dl-capacity-metric"><span>Best DL modulation</span><strong id="dl-cap-modulation">—</strong></div>
+            <div class="dl-capacity-metric"><span>Estimated limiter</span><strong id="dl-cap-limiter">—</strong></div>
+        </div>
+        <p class="hint" id="dl-cap-note">Waiting for live AT+GTCAINFO carrier telemetry.</p>`;
+
+    const cellsCard = document.getElementById('cells-table');
+    const insertionPoint = cellsCard ? cellsCard.closest('.card') : null;
+    if (insertionPoint) {
+        grid.insertBefore(card, insertionPoint);
+    } else {
+        grid.appendChild(card);
+    }
+}
+
 function formatCapacityMbps(mbps) {
     const n = Number(mbps || 0);
     if (!n) return '—';
@@ -184,4 +228,5 @@ function fillCATable(ca) {
 }
 
 initUplinkCAUI();
+initDownlinkCapacityUI();
 fillDownlinkCapacity(null);
