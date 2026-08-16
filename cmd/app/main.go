@@ -69,7 +69,7 @@ func main() {
 		log.Printf("[INFO] Using override AT serial port: %s", targetPort)
 	}
 
-	atClient := repository.NewClient(targetPort)
+	atClient := repository.NewTieredClient(targetPort)
 	if err := atClient.Connect(); err != nil {
 		log.Printf("[WARN] Failed to open AT serial port (%s): %v. Will retry on status polls.", targetPort, err)
 	} else {
@@ -94,6 +94,16 @@ func main() {
 		hotspotConfigPath = filepath.Join(sd, "hotspot.json")
 	}
 
+	inventory := usecase.NewCachedInventory(usecase.InventoryFuncs{
+		ListModemsFn:      repository.ListModems,
+		ListMBIMFn:        repository.ListMBIMDevices,
+		MBIMAvailableFn:   repository.Available,
+		MBIMInstallHintFn: repository.InstallHint,
+	}, 15*time.Second)
+	// Prime before ModemService exists so sysfs walks / tty probes never happen
+	// while the service state mutex is held on the normal UI inventory path.
+	inventory.Prime(domain.DefaultFM350.Vendor, domain.DefaultFM350.Product, atClient.PortName())
+
 	svc := usecase.NewModemService(usecase.ModemServiceConfig{
 		USB:               usb,
 		AT:                atClient,
@@ -103,14 +113,9 @@ func main() {
 		Hotspot:           repository.NewHotspotRepo(hotspotRuntime),
 		HotspotConfigFile: hotspotConfigPath,
 		Discover:          usecase.DiscoverFunc(repository.DiscoverATPort),
-		Inventory: usecase.InventoryFuncs{
-			ListModemsFn:      repository.ListModems,
-			ListMBIMFn:        repository.ListMBIMDevices,
-			MBIMAvailableFn:   repository.Available,
-			MBIMInstallHintFn: repository.InstallHint,
-		},
-		Vendor:  domain.DefaultFM350.Vendor,
-		Product: domain.DefaultFM350.Product,
+		Inventory:         inventory,
+		Vendor:            domain.DefaultFM350.Vendor,
+		Product:           domain.DefaultFM350.Product,
 	})
 	if err := svc.LoadHotspotConfigFile(); err != nil {
 		log.Printf("[WARN] Load hotspot config: %v", err)

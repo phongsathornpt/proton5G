@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"sync"
 	"time"
 
@@ -12,8 +12,8 @@ import (
 )
 
 // SSEHub fans out one marshaled FullStatus snapshot to all SSE subscribers.
-// A single Run goroutine ticks, marshals CachedStatus once, and non-blocking
-// sends the payload so slow clients cannot stall others.
+// A single Run goroutine ticks, marshals changed CachedStatus once, and
+// non-blocking sends the payload so slow clients cannot stall others.
 //
 // Only the hub closes subscriber channels (after unsubscribe removes them).
 // Start exactly once via Server.Run from main.
@@ -21,9 +21,11 @@ type SSEHub struct {
 	status   func() domain.FullStatus
 	interval time.Duration
 
-	mu      sync.Mutex
-	clients map[chan []byte]struct{}
-	last    []byte // last successful payload for instant snapshot on Subscribe
+	mu         sync.Mutex
+	clients    map[chan []byte]struct{}
+	last       []byte // last successful payload for instant snapshot on Subscribe
+	lastStatus domain.FullStatus
+	hasLast    bool
 }
 
 // NewSSEHub builds a hub. status is typically ModemUsecase.CachedStatus.
@@ -91,19 +93,36 @@ func (h *SSEHub) broadcast() {
 	if h.status == nil {
 		return
 	}
-	payload, err := json.Marshal(h.status())
+	status := h.status()
+
+	// UpdatedAt changes every successful poll even when the modem state does not.
+	// Ignore it for change detection so an idle modem does not force a full JSON
+	// marshal, fan-out, JSON.parse, and DOM update every two seconds.
+	semantic := status
+	semantic.UpdatedAt = time.Time{}
+
+	h.mu.Lock()
+	if h.hasLast {
+		previous := h.lastStatus
+		previous.UpdatedAt = time.Time{}
+		if reflect.DeepEqual(semantic, previous) {
+			h.mu.Unlock()
+			return
+		}
+	}
+	h.mu.Unlock()
+
+	payload, err := json.Marshal(status)
 	if err != nil {
 		return
 	}
 
 	h.mu.Lock()
-	// Skip fan-out when snapshot is unchanged (still keep last for new subs).
-	if bytes.Equal(payload, h.last) {
-		h.mu.Unlock()
-		return
-	}
+	// Another broadcast cannot normally race Run, but keep the state update atomic
+	// with subscriber snapshotting for tests and future callers.
+	h.lastStatus = status
+	h.hasLast = true
 	h.last = payload
-	// Copy clients under lock; send outside so slow select cannot hold mu.
 	clients := make([]chan []byte, 0, len(h.clients))
 	for ch := range h.clients {
 		clients = append(clients, ch)
