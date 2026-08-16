@@ -319,9 +319,6 @@ func (c *Client) QueryPDP(cid int) (domain.PDPSession, error) {
 		return sess, err
 	}
 	sess.IP = ParseCGPADDR(addrResp)
-	if sess.IP != "" {
-		sess.Gateway = GuessIPv4Gateway(sess.IP)
-	}
 	if dnsResp, derr := c.SendRaw(CmdGTDNS(cid)); derr == nil {
 		sess.DNS1, sess.DNS2 = ParseGTDNS(dnsResp)
 	}

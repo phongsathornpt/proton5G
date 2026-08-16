@@ -189,9 +189,6 @@ func TestParseCGPADDRAndGTDNS(t *testing.T) {
 	if d1 != "8.8.8.8" || d2 != "1.1.1.1" {
 		t.Fatalf("%q %q", d1, d2)
 	}
-	if gw := GuessIPv4Gateway("10.64.1.2"); gw != "10.64.1.1" {
-		t.Fatalf("gw=%q", gw)
-	}
 }
 
 func TestParseInfoLine(t *testing.T) {

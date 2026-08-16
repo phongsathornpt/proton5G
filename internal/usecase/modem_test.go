@@ -321,7 +321,7 @@ func TestDataConnectRNDIS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if out != "dhcp ok" || net.lastConnect != "enxabc" {
+	if !strings.Contains(out, "dhcp ok") || net.lastConnect != "enxabc" {
 		t.Fatalf("out=%q last=%q", out, net.lastConnect)
 	}
 }
@@ -399,52 +399,6 @@ func TestDataConnectUnknownMode(t *testing.T) {
 	_, err := svc.DataConnect(domain.DataConnectRequest{Mode: "ppp", Iface: "x"})
 	if err == nil {
 		t.Fatal("expected error for unknown mode")
-	}
-}
-
-func TestDataConnectRNDISStaticFallback(t *testing.T) {
-	net := &fakeNet{connectErr: errors.New("dhcp timeout")}
-	at := &fakeAT{port: "/dev/ttyUSB0", pdp: domain.PDPSession{IP: "10.64.1.8", Gateway: "10.64.1.1"}}
-	svc := NewModemService(ModemServiceConfig{
-		USB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
-		AT:  at,
-		Net: net,
-	})
-	out, err := svc.DataConnect(domain.DataConnectRequest{
-		Mode:  domain.DataModeRNDIS,
-		Iface: "enxabc",
-	})
-	if err != nil {
-		t.Fatalf("expected static fallback, err=%v out=%s", err, out)
-	}
-	if net.lastStatic != "enxabc" || net.lastStaticAddr != "10.64.1.8/24" {
-		t.Fatalf("static iface=%q addr=%q", net.lastStatic, net.lastStaticAddr)
-	}
-	if svc.CachedStatus().WAN.Method != domain.WANMethodStatic {
-		t.Fatalf("method=%q", svc.CachedStatus().WAN.Method)
-	}
-}
-
-func TestDataConnectRNDISStaticOnly(t *testing.T) {
-	net := &fakeNet{connectErr: errors.New("should not dhcp")}
-	at := &fakeAT{port: "/dev/ttyUSB0", pdp: domain.PDPSession{IP: "10.1.2.3", Gateway: "10.1.2.1"}}
-	svc := NewModemService(ModemServiceConfig{
-		USB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
-		AT:  at,
-		Net: net,
-	})
-	if _, err := svc.DataConnect(domain.DataConnectRequest{
-		Mode:   domain.DataModeRNDIS,
-		Iface:  "enx1",
-		Method: domain.DataMethodStatic,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if net.lastConnect != "" {
-		t.Fatalf("dhcp should be skipped, last=%q", net.lastConnect)
-	}
-	if net.lastStatic != "enx1" {
-		t.Fatalf("static iface=%q", net.lastStatic)
 	}
 }
 

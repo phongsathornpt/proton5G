@@ -781,73 +781,9 @@ func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, er
 	}
 }
 
-// connectRNDIS activates the PDP context, then DHCP, then static CGPADDR fallback.
+// connectRNDIS delegates FM350 host configuration to the protocol-aware path.
 func (s *ModemService) connectRNDIS(iface string, rawMethod domain.DataMethod, cid int) (string, error) {
-	method, err := domain.ParseDataMethod(string(rawMethod))
-	if err != nil {
-		return "", err
-	}
-	if cid <= 0 {
-		cid = appdefaults.DefaultCID
-	}
-
-	var pdp domain.PDPSession
-	if s.at != nil {
-		_ = s.withAT(func() error {
-			_ = s.at.ActivatePDP(cid)
-			sess, qerr := s.at.QueryPDP(cid)
-			if qerr == nil {
-				pdp = sess
-			}
-			return nil
-		})
-		s.mu.Lock()
-		if pdp.IP != "" {
-			s.status.PDP = pdp
-			if s.status.APN.IPAddr == "" {
-				s.status.APN.IPAddr = pdp.IP
-			}
-		}
-		s.mu.Unlock()
-	}
-
-	var notes []string
-	if pdp.IP != "" {
-		notes = append(notes, "PDP "+pdp.IP)
-	}
-
-	tryDHCP := method == domain.DataMethodAuto || method == domain.DataMethodDHCP
-	tryStatic := method == domain.DataMethodAuto || method == domain.DataMethodStatic
-
-	if tryDHCP {
-		out, err := s.net.ConnectRNDIS(iface)
-		notes = append(notes, strings.TrimSpace(out))
-		addrs := s.net.IfaceAddrs(iface)
-		if err == nil && (len(addrs) > 0 || !tryStatic || pdp.IP == "") {
-			s.setWANMethod(domain.WANMethodDHCP)
-			return strings.TrimSpace(strings.Join(notes, "\n")), nil
-		}
-		if err != nil {
-			notes = append(notes, "dhcp: "+err.Error())
-		}
-		if !tryStatic || pdp.IP == "" {
-			return strings.TrimSpace(strings.Join(notes, "\n")), err
-		}
-	}
-
-	if !tryStatic {
-		return strings.TrimSpace(strings.Join(notes, "\n")), fmt.Errorf("static PDP requested but no method match")
-	}
-	if pdp.IP == "" {
-		return strings.TrimSpace(strings.Join(notes, "\n")), fmt.Errorf("no PDP IPv4 from AT+CGPADDR (set APN / wait for attach)")
-	}
-	staticOut, err := s.net.ConnectRNDISStatic(iface, pdp.IP+"/24", pdp.Gateway)
-	notes = append(notes, strings.TrimSpace(staticOut))
-	if err != nil {
-		return strings.TrimSpace(strings.Join(notes, "\n")), err
-	}
-	s.setWANMethod(domain.WANMethodStatic)
-	return strings.TrimSpace(strings.Join(notes, "\n")), nil
+	return s.connectRNDISConfigured(iface, rawMethod, cid)
 }
 
 func (s *ModemService) setWANMethod(method domain.WANMethod) {

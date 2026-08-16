@@ -463,15 +463,6 @@ func ParseGTDNS(response string) (dns1, dns2 string) {
 	return "", ""
 }
 
-// GuessIPv4Gateway returns a.b.c.1 for a dotted IPv4 host (not from AT).
-func GuessIPv4Gateway(ip string) string {
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 || !isIPv4Addr(ip) {
-		return ""
-	}
-	return parts[0] + "." + parts[1] + "." + parts[2] + ".1"
-}
-
 func quotedOrBareIPs(line string) []string {
 	var out []string
 	rest := line
