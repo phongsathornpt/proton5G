@@ -194,6 +194,7 @@ func (c *Client) GetFullStatus() (domain.ATPoll, error) {
 	sig := MergeExtendedSignal(ParseCSQ(csqResp), cesqResp, gtca, gtcc)
 	cells := ParseGTCCINFOCells(gtcc)
 	ca := ParseGTCAINFOComponents(gtca)
+	ca = EnrichGTCAINFOComponents(ca, gtca)
 	ca = CorrelateCAWithCells(ca, cells)
 	sig = ApplyServingCell(sig, cells)
 

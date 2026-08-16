@@ -91,16 +91,18 @@ type CellInfo struct {
 
 // CAComponent is one AT+GTCAINFO? primary or secondary carrier.
 type CAComponent struct {
-	Component string `json:"component"`            // PCC, SCC1, …
-	Band      string `json:"band,omitempty"`       // B3, B1, n78, etc.
+	Component string `json:"component"`             // PCC, SCC1, …
+	Band      string `json:"band,omitempty"`        // B3, B1, n78, etc.
 	PCI       string `json:"pci,omitempty"`
-	ARFCN     string `json:"arfcn,omitempty"`      // DL EARFCN / NR-ARFCN
-	ULARFCN   string `json:"ul_arfcn,omitempty"`   // UL EARFCN / NR-ARFCN
+	ARFCN     string `json:"arfcn,omitempty"`       // DL EARFCN / NR-ARFCN
+	ULARFCN   string `json:"ul_arfcn,omitempty"`    // UL EARFCN / NR-ARFCN
 	DLBW      string `json:"dl_bandwidth,omitempty"`
 	ULBW      string `json:"ul_bandwidth,omitempty"`
+	DLMIMO    string `json:"dl_mimo,omitempty"`      // e.g. 2x2, 4x4; active network layer count
+	ULMIMO    string `json:"ul_mimo,omitempty"`
 	DLMod     string `json:"dl_modulation,omitempty"`
 	ULMod     string `json:"ul_modulation,omitempty"`
-	ULActive  bool   `json:"ul_active,omitempty"`  // true when UL transmission / UL CA is active
+	ULActive  bool   `json:"ul_active,omitempty"` // true when UL transmission / UL CA is active
 	RSRP      int    `json:"rsrp,omitempty"`
 	RSRQ      int    `json:"rsrq,omitempty"`
 	SINR      int    `json:"sinr,omitempty"`

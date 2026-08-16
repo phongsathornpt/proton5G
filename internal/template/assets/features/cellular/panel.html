@@ -59,6 +59,17 @@
             </div>
         </section>
         <section class="card">
+            <h2>Thailand radio profiles</h2>
+            <div class="button-group">
+                <button type="button" class="btn-primary" onclick="setRAT('th-nsa')">Thailand NSA</button>
+                <button type="button" onclick="setRAT('th-nsa-b40-n41')">NSA B40 + n41</button>
+                <button type="button" onclick="setRAT('th-lte')">Thailand 4G</button>
+                <button type="button" onclick="setRAT('th-lte-b40-b41')">4G B40/B41</button>
+            </div>
+            <p class="hint mt-15">Thailand NSA keeps EN-DC with common LTE anchors and requests NR n41. The strict B40 + n41 profile can improve selection on a known matching site, but may lose service elsewhere. Verify the live anchor and NR carrier in EN-DC Bands / Carrier aggregation.</p>
+            <p class="hint">MIMO layers and QAM are negotiated by the modem/network. The table below reports active MIMO and modulation instead of forcing unsupported values.</p>
+        </section>
+        <section class="card">
             <h2>Identity</h2>
             <div class="info-list">
                 <div class="info-item"><span>Manufacturer:</span> <strong id="ident-manufacturer">-</strong></div>
@@ -93,16 +104,17 @@
                             <th>Component</th><th>Band</th><th>PCI</th>
                             <th>DL ARFCN</th><th>UL ARFCN</th>
                             <th>DL Bandwidth</th><th>UL Bandwidth</th>
+                            <th>DL MIMO</th><th>UL MIMO</th>
                             <th>DL Mod</th><th>UL Mod</th>
                             <th>Uplink</th><th>RSRP</th><th>RSRQ</th><th>SINR</th>
                         </tr>
                     </thead>
                     <tbody id="ca-body">
-                        <tr><td colspan="13" class="muted">No CA data yet</td></tr>
+                        <tr><td colspan="15" class="muted">No CA data yet</td></tr>
                     </tbody>
                 </table>
             </div>
-            <p class="hint">From AT+GTCAINFO correlated with AT+GTCCINFO. DL/UL bandwidth and modulation reflect active carrier aggregation channels.</p>
+            <p class="hint">From AT+GTCAINFO correlated with AT+GTCCINFO. MIMO layers, bandwidth and modulation reflect active carriers; 256QAM is shown only when the modem reports it.</p>
         </section>
     </div>
 </section>
