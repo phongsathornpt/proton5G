@@ -21,9 +21,15 @@ const (
 	CmdCGDCONTQ   = "AT+CGDCONT?"
 	CmdGTACTQ     = "AT+GTACT?"
 	CmdGTUSBMODEQ = "AT+GTUSBMODE?"
+	CmdE5GOPTQ    = "AT+E5GOPT?"
 	// Proprietary Fibocom signal / cell info (fallback when CESQ is empty).
 	CmdGTCAINFO = "AT+GTCAINFO?"
 	CmdGTCCINFO = "AT+GTCCINFO?"
+	// Parameterized Fibocom GTACT mode strings
+	CmdGTACTSetENDC = "AT+GTACT=17,3,6,0"
+	CmdGTACTSet5GSA = "AT+GTACT=14,6,6,0"
+	CmdGTACTSetAuto = "AT+GTACT=20,6,3,0"
+	CmdGTACTSetLTE  = "AT+GTACT=2,3,3,0"
 	// Identity (polled once until IMEI is known).
 	CmdCGMI = "AT+CGMI"
 	CmdCGMM = "AT+CGMM"
@@ -56,6 +62,27 @@ func CmdCGDCONTSet(cid int, pdp domain.PDPType, apn string) string {
 // CmdGTACTSet builds AT+GTACT=<code>.
 func CmdGTACTSet(code int) string {
 	return fmt.Sprintf("AT+GTACT=%d", code)
+}
+
+// CmdGTACTSetByPref returns the preferred full GTACT command string for a preference.
+func CmdGTACTSetByPref(pref domain.RATModePref) string {
+	switch pref {
+	case domain.RATPrefENDC, domain.RATPrefNSA:
+		return CmdGTACTSetENDC
+	case domain.RATPref5GSA:
+		return CmdGTACTSet5GSA
+	case domain.RATPref5G:
+		return CmdGTACTSet(domain.GTACT5GOnly)
+	case domain.RATPrefLTE:
+		return CmdGTACTSet(domain.GTACTLTEOnly)
+	default:
+		return CmdGTACTSetAuto
+	}
+}
+
+// CmdE5GOPTSet builds AT+E5GOPT=<mode>.
+func CmdE5GOPTSet(mode int) string {
+	return fmt.Sprintf("AT+E5GOPT=%d", mode)
 }
 
 // CmdGTUSBMODESet builds AT+GTUSBMODE=<mode>.

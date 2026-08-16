@@ -197,7 +197,7 @@ func (c *Client) GetFullStatus() (domain.ATPoll, error) {
 	ca = CorrelateCAWithCells(ca, cells)
 	sig = ApplyServingCell(sig, cells)
 
-	oper := ParseCOPS(copsResp)
+	oper, copsAct, hasCopsAct := ParseCOPSFull(copsResp)
 	reg5g := ParseRegistration(c5gResp)
 	regLTE := ParseRegistration(clteResp)
 	simState := ParseCPIN(cpinResp)
@@ -223,14 +223,11 @@ func (c *Client) GetFullStatus() (domain.ATPoll, error) {
 		apn.IPAddr = pdp.IP
 	}
 
-	tech := domain.TechUnknown
+	tech, endcInfo := DetectRadioTech(copsAct, hasCopsAct, regLTE, reg5g, cells, ca)
 	regState := domain.RegNotRegistered
-
 	if reg5g.IsRegistered() {
-		tech = domain.Tech5GNR
 		regState = reg5g
 	} else if regLTE.IsRegistered() {
-		tech = domain.TechLTE
 		regState = regLTE
 	}
 
@@ -241,6 +238,7 @@ func (c *Client) GetFullStatus() (domain.ATPoll, error) {
 		Tech:     tech,
 		Reg5G:    reg5g,
 		RegLTE:   regLTE,
+		ENDC:     endcInfo,
 	}
 	poll.SIM = domain.SIMInfo{
 		State: simState,
@@ -348,12 +346,20 @@ func (c *Client) SetRATMode(pref domain.RATModePref) error {
 	if err := c.EnsureConnected(); err != nil {
 		return err
 	}
-	cmd := CmdGTACTSet(pref.GTACTCode())
+	cmd := CmdGTACTSetByPref(pref)
 	resp, err := c.SendRaw(cmd)
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(resp, ATResultOK) {
+	if err != nil || !strings.Contains(resp, ATResultOK) {
+		// Fallback to simple AT+GTACT=<code> if parameterized multi-argument command is rejected
+		fallback := CmdGTACTSet(pref.GTACTCode())
+		if fallback != cmd {
+			resp2, err2 := c.SendRaw(fallback)
+			if err2 == nil && strings.Contains(resp2, ATResultOK) {
+				return nil
+			}
+		}
+		if err != nil {
+			return err
+		}
 		return fmt.Errorf("%s failed: %s", cmd, resp)
 	}
 	return nil

@@ -34,6 +34,11 @@ func TestRenderIndex_ShellAndPanels(t *testing.T) {
 		"UL Bandwidth",
 		"DL Bandwidth",
 		"Uplink",
+		`id="endc-status"`,
+		`id="endc-bands"`,
+		`id="ov-chip-endc"`,
+		"Force 5G (EN-DC)",
+		"Force 5G (SA)",
 		`id="pdp-ip"`,
 		`id="wan-method-select"`,
 	} {

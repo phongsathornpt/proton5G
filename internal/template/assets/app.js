@@ -576,6 +576,18 @@ function updateOverview() {
     const regOk = /home|roam|registered/i.test(reg);
     setChip('ov-chip-reg', 'Reg: ' + reg, regOk ? 'ok' : 'warn');
 
+    const endc = data.network && data.network.endc;
+    const chipEndc = document.getElementById('ov-chip-endc');
+    if (chipEndc) {
+        if (endc && endc.active) {
+            chipEndc.style.display = '';
+            const bandInfo = [endc.anchor_band, endc.nr_band].filter(Boolean).join('+');
+            setChip('ov-chip-endc', 'EN-DC: ' + (bandInfo || 'Active'), 'ok');
+        } else {
+            chipEndc.style.display = 'none';
+        }
+    }
+
     const wanAddrs = lastHotspot && lastHotspot.uplink_addrs;
     const wanUp = wanAddrs && wanAddrs.length;
     setChip('ov-chip-wan', 'WAN: ' + (wanUp ? 'up' : 'down'), wanUp ? 'ok' : 'err');
@@ -671,6 +683,18 @@ function updateUI(data) {
         setText('net-operator', data.network.operator || '-');
         setText('net-tech', data.network.tech || '-');
         setText('net-reg', data.network.reg_state || '-');
+        if (data.network.endc) {
+            const endc = data.network.endc;
+            setText('endc-status', endc.active ? (endc.state || 'Active') : 'Inactive');
+            const bands = [
+                endc.anchor_band ? 'Anchor: ' + endc.anchor_band : '',
+                endc.nr_band ? 'NR: ' + endc.nr_band : ''
+            ].filter(Boolean).join(' · ');
+            setText('endc-bands', bands || '-');
+        } else {
+            setText('endc-status', 'Inactive');
+            setText('endc-bands', '-');
+        }
     }
 
     if (data.sim) {

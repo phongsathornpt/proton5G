@@ -61,9 +61,12 @@ func TestParseICCID(t *testing.T) {
 
 func TestParseCOPS(t *testing.T) {
 	resp := `+COPS: 0,0,"T-Mobile",13`
-	oper := ParseCOPS(resp)
-	if oper != "T-Mobile" {
-		t.Fatalf("expected T-Mobile, got %s", oper)
+	oper, act, hasAct := ParseCOPSFull(resp)
+	if oper != "T-Mobile" || !hasAct || act != 13 {
+		t.Fatalf("expected T-Mobile / 13, got %s / %d (hasAct=%v)", oper, act, hasAct)
+	}
+	if got := ParseCOPS(resp); got != "T-Mobile" {
+		t.Fatalf("expected T-Mobile, got %s", got)
 	}
 }
 
@@ -86,6 +89,47 @@ func TestParseGTACT(t *testing.T) {
 	mode := ParseGTACT("+GTACT: 14,14")
 	if mode != domain.RATMode5GOnly {
 		t.Fatalf("expected 5G Only, got %s", mode)
+	}
+	modeENDC := ParseGTACT("+GTACT: 17,3,6,0")
+	if modeENDC != domain.RATModeENDC {
+		t.Fatalf("expected 5G NSA (EN-DC), got %s", modeENDC)
+	}
+}
+
+func TestParseE5GOPT(t *testing.T) {
+	opt, ok := ParseE5GOPT("+E5GOPT: 5\r\nOK")
+	if !ok || opt != 5 {
+		t.Fatalf("expected 5, got %d (ok=%v)", opt, ok)
+	}
+}
+
+func TestDetectRadioTech(t *testing.T) {
+	// Test 1: COPS AcT 13 (EN-DC) with cell list
+	cells := []domain.CellInfo{
+		{Serving: true, RAT: domain.TechLTE, Band: "3", PCI: "100"},
+		{Serving: false, RAT: domain.Tech5GNR, Band: "78", PCI: "200"},
+	}
+	tech, endc := DetectRadioTech(13, true, domain.RegHome, domain.RegNotRegistered, cells, nil)
+	if tech != domain.Tech5GNSA || !endc.Active || endc.AnchorBand != "B3" || endc.NRBand != "n78" {
+		t.Fatalf("expected active EN-DC, got tech=%s endc=%+v", tech, endc)
+	}
+
+	// Test 2: 5G SA
+	cellsSA := []domain.CellInfo{
+		{Serving: true, RAT: domain.Tech5GNR, Band: "78", PCI: "200"},
+	}
+	techSA, endcSA := DetectRadioTech(11, true, domain.RegNotRegistered, domain.RegHome, cellsSA, nil)
+	if techSA != domain.Tech5GSA || endcSA.Active || endcSA.NRBand != "n78" {
+		t.Fatalf("expected 5G SA, got tech=%s endc=%+v", techSA, endcSA)
+	}
+
+	// Test 3: LTE Only
+	cellsLTE := []domain.CellInfo{
+		{Serving: true, RAT: domain.TechLTE, Band: "20", PCI: "300"},
+	}
+	techLTE, endcLTE := DetectRadioTech(7, true, domain.RegHome, domain.RegNotRegistered, cellsLTE, nil)
+	if techLTE != domain.TechLTE || endcLTE.Active || endcLTE.AnchorBand != "B20" {
+		t.Fatalf("expected LTE, got tech=%s endc=%+v", techLTE, endcLTE)
 	}
 }
 

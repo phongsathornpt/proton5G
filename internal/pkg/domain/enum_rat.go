@@ -11,6 +11,8 @@ type RATMode string
 
 const (
 	RATMode5GOnly      RATMode = "5G Only"
+	RATMode5GSA        RATMode = "5G SA"
+	RATModeENDC        RATMode = "5G NSA (EN-DC)"
 	RATModeLTEOnly     RATMode = "LTE Only"
 	RATModeAuto        RATMode = "Auto (5G/LTE/3G)"
 	RATModeUnspecified RATMode = "Auto"
@@ -18,8 +20,10 @@ const (
 
 // GTACT wire codes (Fibocom AT+GTACT).
 const (
-	GTACT5GOnly  = 14
 	GTACTLTEOnly = 4
+	GTACT5GOnly  = 14
+	GTACT5GSA    = 14
+	GTACTENDC    = 17
 	GTACTAuto    = 20
 )
 
@@ -28,6 +32,9 @@ type RATModePref string
 
 const (
 	RATPref5G   RATModePref = "5g"
+	RATPref5GSA RATModePref = "5g-sa"
+	RATPrefENDC RATModePref = "endc"
+	RATPrefNSA  RATModePref = "nsa"
 	RATPrefLTE  RATModePref = "lte"
 	RATPrefAuto RATModePref = "auto"
 )
@@ -35,21 +42,27 @@ const (
 // ParseRATModePref parses API mode tokens (case-insensitive).
 func ParseRATModePref(s string) (RATModePref, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case string(RATPref5G):
+	case string(RATPrefENDC), string(RATPrefNSA), "5g-nsa", "5g_nsa", "5g-endc", "5g_endc":
+		return RATPrefENDC, nil
+	case string(RATPref5GSA), "5g_sa", "sa":
+		return RATPref5GSA, nil
+	case string(RATPref5G), "5g-only", "5g_only":
 		return RATPref5G, nil
-	case string(RATPrefLTE):
+	case string(RATPrefLTE), "4g", "lte-only", "lte_only":
 		return RATPrefLTE, nil
-	case string(RATPrefAuto):
+	case string(RATPrefAuto), "all":
 		return RATPrefAuto, nil
 	default:
-		return "", fmt.Errorf("invalid RAT mode %q (want 5g|lte|auto)", s)
+		return "", fmt.Errorf("invalid RAT mode %q (want endc|nsa|5g-sa|5g|lte|auto)", s)
 	}
 }
 
 // GTACTCode returns the AT+GTACT numeric mode for this preference.
 func (p RATModePref) GTACTCode() int {
 	switch p {
-	case RATPref5G:
+	case RATPrefENDC, RATPrefNSA:
+		return GTACTENDC
+	case RATPref5G, RATPref5GSA:
 		return GTACT5GOnly
 	case RATPrefLTE:
 		return GTACTLTEOnly
@@ -61,6 +74,10 @@ func (p RATModePref) GTACTCode() int {
 // ToDisplay maps an API preference to a display RATMode.
 func (p RATModePref) ToDisplay() RATMode {
 	switch p {
+	case RATPrefENDC, RATPrefNSA:
+		return RATModeENDC
+	case RATPref5GSA:
+		return RATMode5GSA
 	case RATPref5G:
 		return RATMode5GOnly
 	case RATPrefLTE:
@@ -73,9 +90,11 @@ func (p RATModePref) ToDisplay() RATMode {
 // ParseGTACTCode maps a GTACT numeric code to display RATMode.
 func ParseGTACTCode(code int) RATMode {
 	switch code {
+	case GTACTENDC:
+		return RATModeENDC
 	case GTACT5GOnly:
 		return RATMode5GOnly
-	case GTACTLTEOnly:
+	case GTACTLTEOnly, 2:
 		return RATModeLTEOnly
 	case GTACTAuto:
 		return RATModeAuto
@@ -96,7 +115,9 @@ func ParseGTACTCodeString(s string) RATMode {
 // GTACTCode returns wire code for known display modes (default auto).
 func (m RATMode) GTACTCode() int {
 	switch m {
-	case RATMode5GOnly:
+	case RATModeENDC:
+		return GTACTENDC
+	case RATMode5GOnly, RATMode5GSA:
 		return GTACT5GOnly
 	case RATModeLTEOnly:
 		return GTACTLTEOnly

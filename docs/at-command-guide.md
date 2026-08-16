@@ -37,10 +37,12 @@ Or via the WebUI **USB Hard Reset** button / `POST /api/reset` (requires privile
 | ICCID | `AT+CCID` / `AT+ICCID` | `+CCID: "89…"` |
 | APN Context | `AT+CGDCONT?` | `+CGDCONT: 1,"IPV4V6","internet"` |
 | Set APN | `AT+CGDCONT=1,"IPV4V6","your.apn"` | `OK` |
-| RAT Mode (Preferred) | `AT+GTACT?` | `+GTACT: <mode>` (14=5G, 4=LTE, 20=Auto) |
-| Force 5G NR | `AT+GTACT=14` | `OK` |
-| Force LTE | `AT+GTACT=4` | `OK` |
-| Set Auto Mode | `AT+GTACT=20` | `OK` |
+| RAT Mode (Preferred) | `AT+GTACT?` | `+GTACT: <mode>` (17=EN-DC, 14=5G SA, 4=LTE, 20=Auto) |
+| Force 5G NSA (EN-DC) | `AT+GTACT=17,3,6,0` / `AT+GTACT=17` | `OK` |
+| Force 5G SA | `AT+GTACT=14,6,6,0` / `AT+GTACT=14` | `OK` |
+| Force LTE | `AT+GTACT=2,3,3,0` / `AT+GTACT=4` | `OK` |
+| Set Auto Mode | `AT+GTACT=20,6,3,0` / `AT+GTACT=20` | `OK` |
+| 5G Option (SA/NSA) | `AT+E5GOPT?` / `AT+E5GOPT=5` | 5=NSA only, 6=SA only, 7=SA+NSA |
 | Activate PDP | `AT+CGACT=1,1` | `OK` (ERROR if already active is ignored when `CGPADDR` has an IP) |
 | PDP address | `AT+CGPADDR=1` | `+CGPADDR: 1,"10.x.x.x"` |
 | PDP DNS | `AT+GTDNS=1` | `+GTDNS: 1,"…","…"` |

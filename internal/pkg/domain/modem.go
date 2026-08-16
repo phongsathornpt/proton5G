@@ -20,13 +20,22 @@ type SignalInfo struct {
 	RawCSQ     string `json:"raw_csq"`
 }
 
-// NetworkInfo holds registration state, operator, and technology.
+// ENDCInfo contains 5G Non-Standalone / E-UTRA-NR Dual Connectivity status.
+type ENDCInfo struct {
+	Active     bool   `json:"active"`
+	AnchorBand string `json:"anchor_band,omitempty"` // LTE anchor band (e.g. "B3", "B66")
+	NRBand     string `json:"nr_band,omitempty"`     // 5G NR secondary band (e.g. "n78", "n41")
+	State      string `json:"state,omitempty"`       // "Active", "Configured", "Inactive"
+}
+
+// NetworkInfo holds registration state, operator, technology, and EN-DC status.
 type NetworkInfo struct {
 	Operator string    `json:"operator"`
 	RegState RegState  `json:"reg_state"`
 	Tech     RadioTech `json:"tech"`
 	Reg5G    RegState  `json:"reg_5g"`
 	RegLTE   RegState  `json:"reg_lte"`
+	ENDC     ENDCInfo  `json:"endc,omitempty"`
 }
 
 // SIMInfo holds SIM readiness, IMSI, and ICCID.

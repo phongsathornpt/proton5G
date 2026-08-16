@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,22 +156,34 @@ func TestMBIMStatusEndpoint(t *testing.T) {
 }
 
 func TestSetRATValid(t *testing.T) {
-	stub := &stubService{}
-	srv := NewServer(stub, "")
-	req := httptest.NewRequest("POST", "/api/rat", strings.NewReader(`{"mode":"5g"}`))
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-	if stub.lastRAT != domain.RATPref5G {
-		t.Fatalf("got %q", stub.lastRAT)
+	for _, tc := range []struct {
+		input string
+		want  domain.RATModePref
+	}{
+		{"5g", domain.RATPref5G},
+		{"lte", domain.RATPrefLTE},
+		{"auto", domain.RATPrefAuto},
+		{"endc", domain.RATPrefENDC},
+		{"nsa", domain.RATPrefENDC},
+		{"5g-sa", domain.RATPref5GSA},
+	} {
+		stub := &stubService{}
+		srv := NewServer(stub, "")
+		req := httptest.NewRequest("POST", "/api/rat", strings.NewReader(fmt.Sprintf(`{"mode":%q}`, tc.input)))
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %q, got %d body=%s", tc.input, w.Code, w.Body.String())
+		}
+		if stub.lastRAT != tc.want {
+			t.Fatalf("for %q, got %q, want %q", tc.input, stub.lastRAT, tc.want)
+		}
 	}
 }
 
 func TestSetRATInvalid(t *testing.T) {
 	srv := NewServer(&stubService{}, "")
-	req := httptest.NewRequest("POST", "/api/rat", strings.NewReader(`{"mode":"nsa"}`))
+	req := httptest.NewRequest("POST", "/api/rat", strings.NewReader(`{"mode":"invalid_xyz"}`))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {

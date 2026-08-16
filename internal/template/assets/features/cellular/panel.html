@@ -30,6 +30,8 @@
             <div class="info-list">
                 <div class="info-item"><span>Operator:</span> <strong id="net-operator">-</strong></div>
                 <div class="info-item"><span>Technology:</span> <strong id="net-tech">-</strong></div>
+                <div class="info-item"><span>EN-DC:</span> <strong id="endc-status">-</strong></div>
+                <div class="info-item"><span>EN-DC Bands:</span> <strong id="endc-bands">-</strong></div>
                 <div class="info-item"><span>Registration:</span> <strong id="net-reg">-</strong></div>
                 <div class="info-item"><span>RSSI:</span> <strong id="sig-rssi">-</strong></div>
                 <div class="info-item"><span>RSRP:</span> <strong id="sig-rsrp">-</strong></div>
@@ -50,7 +52,8 @@
                 <div class="info-item"><span>Preferred mode:</span> <strong id="rat-mode">-</strong></div>
             </div>
             <div class="button-group mt-15">
-                <button type="button" onclick="setRAT('5g')">Force 5G</button>
+                <button type="button" onclick="setRAT('endc')">Force 5G (EN-DC)</button>
+                <button type="button" onclick="setRAT('5g-sa')">Force 5G (SA)</button>
                 <button type="button" onclick="setRAT('lte')">Force LTE</button>
                 <button type="button" onclick="setRAT('auto')">Auto mode</button>
             </div>

@@ -274,17 +274,52 @@ func ParseGTUSBMODE(response string) int {
 
 const unknownOperator = "Unknown Operator"
 
-func ParseCOPS(response string) string {
+// ParseCOPSFull extracts operator name and optional 3GPP AcT (access technology) code.
+// Format: +COPS: <mode>,<format>,"<oper>",<act>
+// AcT codes: 13/10 = E-UTRA-NR Dual Connectivity (EN-DC / 5G NSA), 11 = 5G SA, 7 = LTE, 2 = UMTS.
+func ParseCOPSFull(response string) (oper string, act int, hasAct bool) {
 	for _, line := range strings.Split(response, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "+COPS:") {
 			parts := strings.Split(line, ",")
 			if len(parts) >= 3 {
-				return strings.Trim(parts[2], "\" ")
+				oper = strings.Trim(parts[2], "\" ")
+			}
+			if len(parts) >= 4 {
+				if n, err := strconv.Atoi(strings.TrimSpace(parts[3])); err == nil {
+					act = n
+					hasAct = true
+				}
+			}
+			if oper != "" {
+				return oper, act, hasAct
 			}
 		}
 	}
-	return unknownOperator
+	return unknownOperator, 0, false
+}
+
+func ParseCOPS(response string) string {
+	oper, _, _ := ParseCOPSFull(response)
+	return oper
+}
+
+// ParseE5GOPT extracts the 5G option mode (e.g. 5=NSA only, 6=SA only, 7=SA+NSA).
+func ParseE5GOPT(response string) (int, bool) {
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "+E5GOPT:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "+E5GOPT:"))
+			if i := strings.IndexAny(val, ",; "); i > 0 {
+				val = val[:i]
+			}
+			n, err := strconv.Atoi(val)
+			if err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func ParseRegistration(response string) domain.RegState {
@@ -964,6 +999,82 @@ func CorrelateCAWithCells(ca []domain.CAComponent, cells []domain.CellInfo) []do
 		}
 	}
 	return ca
+}
+
+// DetectRadioTech determines active technology (5G NSA, 5G SA, LTE, UMTS) and EN-DC details.
+func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState, cells []domain.CellInfo, ca []domain.CAComponent) (domain.RadioTech, domain.ENDCInfo) {
+	var endcInfo domain.ENDCInfo
+	var anchorBand, nrBand string
+	hasNRCell := false
+	hasLTEServing := false
+
+	for _, c := range cells {
+		if c.RAT == domain.Tech5GNR {
+			hasNRCell = true
+			if nrBand == "" && c.Band != "" {
+				nrBand = FormatBand(c.Band, true)
+			}
+		}
+		if c.Serving && (c.RAT == domain.TechLTE || c.RAT == domain.TechUnknown) {
+			hasLTEServing = true
+			if anchorBand == "" && c.Band != "" {
+				anchorBand = FormatBand(c.Band, false)
+			}
+		}
+	}
+
+	for _, c := range ca {
+		if strings.HasPrefix(strings.ToLower(c.Band), "n") || (c.ARFCN != "" && atoiOr(c.ARFCN, 0) >= 100000) {
+			hasNRCell = true
+			if nrBand == "" {
+				nrBand = c.Band
+			}
+		} else if c.Component == "PCC" && anchorBand == "" && c.Band != "" {
+			anchorBand = c.Band
+		}
+	}
+
+	// EN-DC detection criteria:
+	// 1. COPS AcT is 13 (E-UTRA-NR dual connectivity) or 10 (E-UTRA connected to 5GC)
+	// 2. Or dual registered on both LTE and 5G
+	// 3. Or both LTE anchor and active 5G NR carrier present
+	isENDC := (hasCopsAct && (copsAct == 13 || copsAct == 10)) ||
+		(regLTE.IsRegistered() && reg5g.IsRegistered()) ||
+		(regLTE.IsRegistered() && hasNRCell && hasLTEServing)
+
+	if isENDC {
+		endcInfo = domain.ENDCInfo{
+			Active:     true,
+			AnchorBand: anchorBand,
+			NRBand:     nrBand,
+			State:      "Active",
+		}
+		return domain.Tech5GNSA, endcInfo
+	}
+
+	if (hasCopsAct && copsAct == 11) || reg5g.IsRegistered() || (hasNRCell && !hasLTEServing) {
+		endcInfo = domain.ENDCInfo{
+			Active: false,
+			NRBand: nrBand,
+			State:  "Inactive",
+		}
+		return domain.Tech5GSA, endcInfo
+	}
+
+	if (hasCopsAct && (copsAct == 7 || copsAct == 4)) || regLTE.IsRegistered() || hasLTEServing {
+		endcInfo = domain.ENDCInfo{
+			Active:     false,
+			AnchorBand: anchorBand,
+			State:      "Inactive",
+		}
+		return domain.TechLTE, endcInfo
+	}
+
+	if (hasCopsAct && copsAct == 2) || regLTE == domain.RegHome || regLTE == domain.RegRoaming {
+		return domain.TechUMTS, endcInfo
+	}
+
+	return domain.TechUnknown, endcInfo
 }
 
 // ApplyServingCell fills missing RSRP/RSRQ/SINR from the serving GTCCINFO row.

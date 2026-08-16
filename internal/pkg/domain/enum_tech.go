@@ -8,6 +8,9 @@ type RadioTech string
 const (
 	TechUnknown RadioTech = "Unknown"
 	Tech5GNR    RadioTech = "5G NR"
+	Tech5GSA    RadioTech = "5G SA"
+	Tech5GNSA   RadioTech = "5G NSA (EN-DC)"
+	Tech5GENDC  RadioTech = "5G NSA (EN-DC)" // Synonym for Tech5GNSA
 	TechLTE     RadioTech = "LTE"
 	TechUMTS    RadioTech = "UMTS"
 )

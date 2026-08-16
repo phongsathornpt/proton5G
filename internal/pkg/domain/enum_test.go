@@ -25,8 +25,23 @@ func TestRATModePref(t *testing.T) {
 	if err != nil || p != RATPref5G || p.GTACTCode() != GTACT5GOnly {
 		t.Fatalf("got %v %v", p, err)
 	}
-	if _, err := ParseRATModePref("nsa"); err == nil {
-		t.Fatal("expected error")
+	pNSA, err := ParseRATModePref("endc")
+	if err != nil || pNSA != RATPrefENDC || pNSA.GTACTCode() != GTACTENDC || pNSA.ToDisplay() != RATModeENDC {
+		t.Fatalf("endc failed: %v %v", pNSA, err)
+	}
+	pNSA2, err := ParseRATModePref("nsa")
+	if err != nil || pNSA2 != RATPrefENDC || pNSA2.GTACTCode() != GTACTENDC {
+		t.Fatalf("nsa failed: %v %v", pNSA2, err)
+	}
+	pSA, err := ParseRATModePref("5g-sa")
+	if err != nil || pSA != RATPref5GSA || pSA.GTACTCode() != GTACT5GOnly || pSA.ToDisplay() != RATMode5GSA {
+		t.Fatalf("5g-sa failed: %v %v", pSA, err)
+	}
+	if _, err := ParseRATModePref("invalid-mode-xyz"); err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if ParseGTACTCode(GTACTENDC) != RATModeENDC {
+		t.Fatal("endc map")
 	}
 	if ParseGTACTCode(GTACT5GOnly) != RATMode5GOnly {
 		t.Fatal("gtact map")
