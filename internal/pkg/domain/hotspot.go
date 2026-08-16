@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 )
 
 // Hotspot runtime states (JSON-stable for WebUI).
@@ -115,12 +115,18 @@ func ValidateHotspotConfig(cfg HotspotConfig) error {
 	if ssid == "" {
 		return fmt.Errorf("ssid is required")
 	}
-	if n := utf8.RuneCountInString(ssid); n > 32 {
-		return fmt.Errorf("ssid too long (%d > 32)", n)
+	if n := len([]byte(ssid)); n > 32 {
+		return fmt.Errorf("ssid too long (%d bytes > 32)", n)
+	}
+	if containsHotspotControl(ssid) {
+		return fmt.Errorf("ssid contains control characters")
 	}
 	pass := cfg.Password
 	if len(pass) < 8 || len(pass) > 63 {
 		return fmt.Errorf("password must be 8–63 characters (WPA2-PSK)")
+	}
+	if containsHotspotControl(pass) {
+		return fmt.Errorf("password contains control characters")
 	}
 	if err := ValidateIfaceName(cfg.WlanIface); err != nil {
 		return fmt.Errorf("wlan_iface: %w", err)
@@ -155,11 +161,23 @@ func ValidateHotspotConfig(cfg HotspotConfig) error {
 	if err != nil {
 		return fmt.Errorf("lan_cidr: %w", err)
 	}
-	if ip.To4() == nil {
+	ip4 := ip.To4()
+	if ip4 == nil {
 		return fmt.Errorf("lan_cidr must be IPv4")
 	}
-	if !ipNet.Contains(ip) {
-		return fmt.Errorf("lan_cidr host not in network")
+	ones, bits := ipNet.Mask.Size()
+	if bits != 32 || ones > 30 {
+		return fmt.Errorf("lan_cidr must provide at least two usable IPv4 hosts")
+	}
+	network := ipNet.IP.To4()
+	broadcast := net.IPv4(
+		network[0]|^ipNet.Mask[0],
+		network[1]|^ipNet.Mask[1],
+		network[2]|^ipNet.Mask[2],
+		network[3]|^ipNet.Mask[3],
+	).To4()
+	if ip4.Equal(network) || ip4.Equal(broadcast) {
+		return fmt.Errorf("lan_cidr must use a host address, not the network/broadcast address")
 	}
 	if cfg.Country != "" {
 		c := strings.ToUpper(strings.TrimSpace(cfg.Country))
@@ -168,6 +186,15 @@ func ValidateHotspotConfig(cfg HotspotConfig) error {
 		}
 	}
 	return nil
+}
+
+func containsHotspotControl(value string) bool {
+	for _, r := range value {
+		if r == '\r' || r == '\n' || r == 0 || unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateIfaceName rejects empty or unsafe Linux interface names.

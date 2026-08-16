@@ -20,6 +20,13 @@ func defaultHotspotConfig() domain.HotspotConfig {
 	}
 }
 
+func hotspotDefaultChannel(band string) int {
+	if band == domain.HotspotBand5 {
+		return 36
+	}
+	return appdefaults.HotspotChannel
+}
+
 // HotspotStatus returns tools, devices, config (password redacted), and runtime state.
 func (s *ModemService) HotspotStatus() domain.HotspotStatus {
 	st := domain.HotspotStatus{
@@ -110,8 +117,8 @@ func (s *ModemService) LoadHotspotConfigFile() error {
 	if merged.Band == "" {
 		merged.Band = appdefaults.HotspotBand
 	}
-	if merged.Channel <= 0 {
-		merged.Channel = appdefaults.HotspotChannel
+	if cfg.Channel <= 0 {
+		merged.Channel = hotspotDefaultChannel(merged.Band)
 	}
 	s.hotspotMu.Lock()
 	s.hotspotCfg = merged
@@ -135,6 +142,7 @@ func (s *ModemService) HotspotSetConfig(cfg domain.HotspotConfig) error {
 	base := s.hotspotCfg
 	s.hotspotMu.Unlock()
 
+	patch := cfg
 	cfg = mergeHotspotConfig(base, cfg)
 	// Allow saving incomplete password only if not starting — still require SSID/iface when set.
 	if strings.TrimSpace(cfg.SSID) == "" {
@@ -151,8 +159,10 @@ func (s *ModemService) HotspotSetConfig(cfg domain.HotspotConfig) error {
 	if cfg.Band == "" {
 		cfg.Band = appdefaults.HotspotBand
 	}
-	if cfg.Channel <= 0 {
-		cfg.Channel = appdefaults.HotspotChannel
+	if patch.Band != "" && patch.Channel == 0 {
+		cfg.Channel = hotspotDefaultChannel(cfg.Band)
+	} else if cfg.Channel <= 0 {
+		cfg.Channel = hotspotDefaultChannel(cfg.Band)
 	}
 	// Full WPA2 validation only if password present
 	if cfg.Password != "" && cfg.Password != "********" {
@@ -253,8 +263,10 @@ func (s *ModemService) HotspotStart(req domain.HotspotStartRequest) (domain.Hots
 	if cfg.Band == "" {
 		cfg.Band = appdefaults.HotspotBand
 	}
-	if cfg.Channel <= 0 {
-		cfg.Channel = appdefaults.HotspotChannel
+	if req.Band != "" && req.Channel == 0 {
+		cfg.Channel = hotspotDefaultChannel(cfg.Band)
+	} else if cfg.Channel <= 0 {
+		cfg.Channel = hotspotDefaultChannel(cfg.Band)
 	}
 	if cfg.SSID == "" {
 		cfg.SSID = appdefaults.HotspotSSID

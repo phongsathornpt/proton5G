@@ -65,3 +65,44 @@ func TestRedactedConfig(t *testing.T) {
 		t.Fatalf("got %q", c.Password)
 	}
 }
+
+func TestValidateHotspotConfigRejectsHostapdInjection(t *testing.T) {
+	base := HotspotConfig{
+		SSID: "ok", Password: "password1", WlanIface: "wlan0",
+		Band: HotspotBand24, Channel: 6, LANCIDR: "192.168.50.1/24",
+	}
+	for _, mutate := range []func(*HotspotConfig){
+		func(c *HotspotConfig) { c.SSID = "safe\ncountry_code=ZZ" },
+		func(c *HotspotConfig) { c.Password = "password1\nwpa=0" },
+	} {
+		cfg := base
+		mutate(&cfg)
+		if err := ValidateHotspotConfig(cfg); err == nil {
+			t.Fatal("expected control-character rejection")
+		}
+	}
+}
+
+func TestValidateHotspotConfigSSIDUsesByteLimit(t *testing.T) {
+	cfg := HotspotConfig{
+		SSID: "กกกกกกกกกกก", Password: "password1", WlanIface: "wlan0",
+		Band: HotspotBand24, Channel: 6, LANCIDR: "192.168.50.1/24",
+	}
+	if err := ValidateHotspotConfig(cfg); err == nil {
+		t.Fatal("expected >32-byte UTF-8 SSID rejection")
+	}
+}
+
+func TestValidateHotspotConfigRejectsUnusableLANGateway(t *testing.T) {
+	base := HotspotConfig{
+		SSID: "ok", Password: "password1", WlanIface: "wlan0",
+		Band: HotspotBand24, Channel: 6,
+	}
+	for _, cidr := range []string{"192.168.50.0/24", "192.168.50.255/24", "192.168.50.1/31", "192.168.50.1/32"} {
+		cfg := base
+		cfg.LANCIDR = cidr
+		if err := ValidateHotspotConfig(cfg); err == nil {
+			t.Fatalf("expected invalid LAN CIDR %s", cidr)
+		}
+	}
+}

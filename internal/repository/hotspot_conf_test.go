@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"fm350-monitor/internal/pkg/appdefaults"
 	"fm350-monitor/internal/pkg/domain"
 )
 
@@ -61,5 +62,49 @@ func TestGenerateDnsmasqConf(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestGenerateDnsmasqConfDerivesRangeForCustomLAN(t *testing.T) {
+	out, err := GenerateDnsmasqConf(domain.HotspotConfig{
+		WlanIface: "wlan0", LANCIDR: "10.20.30.1/24",
+	}, appdefaults.HotspotDHCPStart, appdefaults.HotspotDHCPEnd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "dhcp-range=10.20.30.10,10.20.30.200,12h") {
+		t.Fatal(out)
+	}
+	if !strings.Contains(out, "dhcp-option=3,10.20.30.1") {
+		t.Fatal(out)
+	}
+}
+
+func TestGenerateDnsmasqConfSmallSubnetAvoidsGateway(t *testing.T) {
+	out, err := GenerateDnsmasqConf(domain.HotspotConfig{
+		WlanIface: "wlan0", LANCIDR: "10.20.30.1/29",
+	}, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "dhcp-range=10.20.30.2,10.20.30.6,12h") {
+		t.Fatal(out)
+	}
+}
+
+func TestGenerateHostapdConf5GDefaultChannel(t *testing.T) {
+	out := GenerateHostapdConf(domain.HotspotConfig{
+		SSID: "x", Password: "password1", WlanIface: "wlan1",
+		Band: domain.HotspotBand5,
+	})
+	if !strings.Contains(out, "channel=36") {
+		t.Fatal(out)
+	}
+}
+
+func TestHotspotLANNetwork(t *testing.T) {
+	got, err := hotspotLANNetwork("192.168.50.1/24")
+	if err != nil || got != "192.168.50.0/24" {
+		t.Fatalf("got=%q err=%v", got, err)
 	}
 }
