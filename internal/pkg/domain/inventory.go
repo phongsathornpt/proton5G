@@ -1,36 +1,77 @@
 package domain
 
-// Interface kinds for modem child nodes.
-const (
-	IfaceKindAT     = "at"
-	IfaceKindMBIM   = "mbim"
-	IfaceKindSerial = "serial"
-	IfaceKindNet    = "net" // RNDIS/ECM network interface
+import (
+	"fmt"
+	"strings"
 )
 
-// Data path modes detected on the USB composition.
+// InterfaceKind is a stable API token for modem child-node kinds.
+type InterfaceKind string
+
 const (
-	DataModeNone   = "none"
-	DataModeRNDIS  = "rndis"
-	DataModeMBIM   = "mbim"
-	DataModeMixed  = "mixed"
-	DataModeATOnly = "at_only"
+	IfaceKindAT     InterfaceKind = "at"
+	IfaceKindMBIM   InterfaceKind = "mbim"
+	IfaceKindSerial InterfaceKind = "serial"
+	IfaceKindNet    InterfaceKind = "net" // RNDIS/ECM network interface
 )
 
-// RNDIS address methods for POST /api/data/connect.
+// DataMode is a stable API token for modem data paths and USB composition modes.
+type DataMode string
+
 const (
-	DataMethodAuto   = "auto" // DHCP, then PDP static from CGPADDR
-	DataMethodDHCP   = "dhcp"
-	DataMethodStatic = "static"
+	DataModeNone   DataMode = "none"
+	DataModeAuto   DataMode = "auto"
+	DataModeRNDIS  DataMode = "rndis"
+	DataModeMBIM   DataMode = "mbim"
+	DataModeMixed  DataMode = "mixed"
+	DataModeATOnly DataMode = "at_only"
 )
+
+// ParseDataMode validates request-facing data modes. Empty input means auto;
+// the legacy "net" alias is normalized to RNDIS.
+func ParseDataMode(raw string) (DataMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(DataModeAuto):
+		return DataModeAuto, nil
+	case string(DataModeRNDIS), "net":
+		return DataModeRNDIS, nil
+	case string(DataModeMBIM):
+		return DataModeMBIM, nil
+	default:
+		return "", fmt.Errorf("invalid data mode %q (want auto|rndis|mbim)", raw)
+	}
+}
+
+// DataMethod controls RNDIS address configuration.
+type DataMethod string
+
+const (
+	DataMethodAuto   DataMethod = "auto" // DHCP, then PDP static from CGPADDR
+	DataMethodDHCP   DataMethod = "dhcp"
+	DataMethodStatic DataMethod = "static"
+)
+
+// ParseDataMethod validates and normalizes RNDIS address methods.
+func ParseDataMethod(raw string) (DataMethod, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(DataMethodAuto):
+		return DataMethodAuto, nil
+	case string(DataMethodDHCP):
+		return DataMethodDHCP, nil
+	case string(DataMethodStatic):
+		return DataMethodStatic, nil
+	default:
+		return "", fmt.Errorf("invalid data method %q (want auto|dhcp|static)", raw)
+	}
+}
 
 // ModemInterface is one device node belonging to a modem (serial AT, MBIM, or net).
 type ModemInterface struct {
-	Path    string `json:"path"`
-	Kind    string `json:"kind"`
-	ATReady bool   `json:"at_ready,omitempty"`
-	Label   string `json:"label"`
-	State   string `json:"state,omitempty"` // for net: UP/DOWN
+	Path    string        `json:"path"`
+	Kind    InterfaceKind `json:"kind"`
+	ATReady bool          `json:"at_ready,omitempty"`
+	Label   string        `json:"label"`
+	State   string        `json:"state,omitempty"` // for net: UP/DOWN
 }
 
 // ModemDevice is one logical USB modem (or synthetic serial-only entry).
@@ -42,10 +83,10 @@ type ModemDevice struct {
 	SysPath      string           `json:"sys_path,omitempty"`
 	Connected    bool             `json:"connected"`
 	PowerControl PowerControl     `json:"power_control,omitempty"`
-	DataMode     string           `json:"data_mode"` // rndis | mbim | at_only | mixed | none
+	DataMode     DataMode         `json:"data_mode"`
 	ATPorts      []ModemInterface `json:"at_ports"`
 	MBIMNodes    []ModemInterface `json:"mbim_nodes"`
-	NetIfaces    []ModemInterface `json:"net_ifaces"` // RNDIS etc.
+	NetIfaces    []ModemInterface `json:"net_ifaces"`
 }
 
 // ModemInventory is the full discovery snapshot + active selection.
@@ -54,7 +95,7 @@ type ModemInventory struct {
 	SelectedModemID string        `json:"selected_modem_id"`
 	SelectedATPort  string        `json:"selected_at_port"`
 	SelectedMBIM    string        `json:"selected_mbim"`
-	SelectedNet     string        `json:"selected_net"` // RNDIS iface name
+	SelectedNet     string        `json:"selected_net"`
 	MBIMCLI         bool          `json:"mbimcli_available"`
 	InstallHint     string        `json:"install_hint,omitempty"`
 	Note            string        `json:"note,omitempty"`
@@ -70,8 +111,8 @@ type ModemSelectRequest struct {
 
 // DataConnectRequest brings up a data path (RNDIS iface or MBIM device).
 type DataConnectRequest struct {
-	Mode   string `json:"mode"`  // "rndis" | "mbim"
-	Iface  string `json:"iface"` // net name or /dev/cdc-wdm*
-	APN    string `json:"apn,omitempty"`
-	Method string `json:"method,omitempty"` // auto | dhcp | static (RNDIS only)
+	Mode   DataMode   `json:"mode"`
+	Iface  string     `json:"iface"`
+	APN    string     `json:"apn,omitempty"`
+	Method DataMethod `json:"method,omitempty"`
 }

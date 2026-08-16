@@ -272,7 +272,10 @@ func (s *Server) handleMBIMConnect(w http.ResponseWriter, r *http.Request) {
 		APN    string `json:"apn"`
 		Device string `json:"device"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	out, err := s.svc.MBIMConnect(req.Device, req.APN)
 	if err != nil {
@@ -287,7 +290,10 @@ func (s *Server) handleMBIMDisconnect(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Device string `json:"device"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	out, err := s.svc.MBIMDisconnect(req.Device)
 	if err != nil {
@@ -315,7 +321,10 @@ func (s *Server) handleDataConnect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDataDisconnect(w http.ResponseWriter, r *http.Request) {
 	var req domain.DataConnectRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	out, err := s.svc.DataDisconnect(req)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -385,7 +394,10 @@ func (s *Server) handleHotspotConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHotspotStart(w http.ResponseWriter, r *http.Request) {
 	var req domain.HotspotStartRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	st, err := s.svc.HotspotStart(req)
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {

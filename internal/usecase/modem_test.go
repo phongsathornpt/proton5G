@@ -420,7 +420,7 @@ func TestDataConnectRNDISStaticFallback(t *testing.T) {
 	if net.lastStatic != "enxabc" || net.lastStaticAddr != "10.64.1.8/24" {
 		t.Fatalf("static iface=%q addr=%q", net.lastStatic, net.lastStaticAddr)
 	}
-	if svc.CachedStatus().WAN.Method != domain.DataMethodStatic {
+	if svc.CachedStatus().WAN.Method != domain.WANMethodStatic {
 		t.Fatalf("method=%q", svc.CachedStatus().WAN.Method)
 	}
 }

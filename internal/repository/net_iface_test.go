@@ -18,7 +18,7 @@ func TestDetectDataMode(t *testing.T) {
 		{2, 3, "mixed"},
 	}
 	for _, c := range cases {
-		if got := detectDataMode(c.mbim, c.net); got != c.want {
+		if got := detectDataMode(c.mbim, c.net); string(got) != c.want {
 			t.Fatalf("detectDataMode(%d,%d)=%q want %q", c.mbim, c.net, got, c.want)
 		}
 	}

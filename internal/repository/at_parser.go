@@ -644,11 +644,13 @@ func DeriveBandFromARFCN(arfcn int) string {
 	if arfcn <= 0 {
 		return ""
 	}
-	// 5G NR-ARFCN ranges
+	// 5G NR-ARFCN ranges. n77 and n78 overlap from 3300-3800 MHz, so
+	// ARFCN alone cannot distinguish them there. Prefer the narrower/common n78
+	// label in the shared range and report n77 only in its unambiguous upper span.
 	switch {
-	case arfcn >= 620000 && arfcn <= 680000:
+	case arfcn >= 620000 && arfcn <= 653333:
 		return "n78"
-	case arfcn >= 630000 && arfcn <= 653333:
+	case arfcn >= 653334 && arfcn <= 680000:
 		return "n77"
 	case arfcn >= 499200 && arfcn <= 537999:
 		return "n41"
@@ -1007,6 +1009,7 @@ func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState
 	var anchorBand, nrBand string
 	hasNRCell := false
 	hasLTEServing := false
+	hasUMTSCell := false
 
 	for _, c := range cells {
 		if c.RAT == domain.Tech5GNR {
@@ -1014,6 +1017,9 @@ func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState
 			if nrBand == "" && c.Band != "" {
 				nrBand = FormatBand(c.Band, true)
 			}
+		}
+		if c.RAT == domain.TechUMTS {
+			hasUMTSCell = true
 		}
 		if c.Serving && (c.RAT == domain.TechLTE || c.RAT == domain.TechUnknown) {
 			hasLTEServing = true
@@ -1047,7 +1053,7 @@ func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState
 			Active:     true,
 			AnchorBand: anchorBand,
 			NRBand:     nrBand,
-			State:      "Active",
+			State:      domain.ENDCStateActive,
 		}
 		return domain.Tech5GNSA, endcInfo
 	}
@@ -1056,7 +1062,7 @@ func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState
 		endcInfo = domain.ENDCInfo{
 			Active: false,
 			NRBand: nrBand,
-			State:  "Inactive",
+			State:  domain.ENDCStateInactive,
 		}
 		return domain.Tech5GSA, endcInfo
 	}
@@ -1065,12 +1071,12 @@ func DetectRadioTech(copsAct int, hasCopsAct bool, regLTE, reg5g domain.RegState
 		endcInfo = domain.ENDCInfo{
 			Active:     false,
 			AnchorBand: anchorBand,
-			State:      "Inactive",
+			State:      domain.ENDCStateInactive,
 		}
 		return domain.TechLTE, endcInfo
 	}
 
-	if (hasCopsAct && copsAct == 2) || regLTE == domain.RegHome || regLTE == domain.RegRoaming {
+	if (hasCopsAct && copsAct == 2) || hasUMTSCell {
 		return domain.TechUMTS, endcInfo
 	}
 
