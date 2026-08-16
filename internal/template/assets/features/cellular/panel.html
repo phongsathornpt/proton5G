@@ -97,6 +97,13 @@
         </section>
         <section class="card full-width">
             <h2>Carrier aggregation</h2>
+            <div class="info-list mb-15">
+                <div class="info-item"><span>Uplink CA:</span> <strong id="ul-ca-status">-</strong></div>
+                <div class="info-item"><span>UL carriers:</span> <strong id="ul-ca-carriers">-</strong></div>
+                <div class="info-item"><span>UL bands:</span> <strong id="ul-ca-bands">-</strong></div>
+                <div class="info-item"><span>UL MIMO:</span> <strong id="ul-ca-mimo">-</strong></div>
+                <div class="info-item"><span>UL modulation:</span> <strong id="ul-ca-modulation">-</strong></div>
+            </div>
             <div class="table-wrap">
                 <table class="data-table" id="ca-table">
                     <thead>
@@ -114,7 +121,8 @@
                     </tbody>
                 </table>
             </div>
-            <p class="hint">From AT+GTCAINFO correlated with AT+GTCCINFO. MIMO layers, bandwidth and modulation reflect active carriers; 256QAM is shown only when the modem reports it.</p>
+            <p class="hint">From AT+GTCAINFO correlated with AT+GTCCINFO. Uplink 2CA is shown only when PCC plus at least one same-RAT SCC are both reported uplink-active. LTE + NR EN-DC uplink is reported separately and is not mislabeled as same-RAT UL CA.</p>
+            <p class="hint">MIMO layers, bandwidth and modulation reflect active carriers; 256QAM is shown only when the modem reports it.</p>
         </section>
     </div>
 </section>
