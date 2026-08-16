@@ -1,0 +1,22 @@
+name: Performance branch validation
+
+on:
+  push:
+    branches:
+      - perf/reduce-poll-overhead
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go tests
+        run: go test ./...
+      - name: Go vet
+        run: go vet ./...
+      - name: JavaScript syntax
+        run: node --check internal/template/assets/shared/performance.js
