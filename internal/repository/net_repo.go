@@ -18,7 +18,7 @@ func (n *NetRepo) DisconnectRNDIS(iface string) (string, error) {
 }
 
 func (n *NetRepo) IfaceAddrs(iface string) []string {
-	return NetIfaceAddrs(iface)
+	return NetIfaceAddrsNative(iface)
 }
 
 func (n *NetRepo) IfaceCounters(iface string) (rx, tx uint64) {
