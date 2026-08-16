@@ -16,7 +16,7 @@ type CachedInventory struct {
 	base DeviceInventory
 	ttl  time.Duration
 
-	mu         sync.Mutex
+	mu          sync.Mutex
 	initialized bool
 	refreshing  bool
 	vendor      string
