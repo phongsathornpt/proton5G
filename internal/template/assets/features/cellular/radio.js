@@ -42,14 +42,52 @@ function joinCarrierField(carriers, key) {
     return values.length ? values.join(' + ') : '—';
 }
 
+function initUplinkCAUI() {
+    const status = document.getElementById('ul-ca-status');
+    if (!status) return;
+
+    const list = status.closest('.info-list');
+    if (!list) return;
+
+    list.classList.add('ul-ca-summary');
+    list.setAttribute('aria-label', 'Uplink carrier aggregation summary');
+
+    Array.from(list.querySelectorAll('.info-item')).forEach((item, index) => {
+        item.classList.add('ul-ca-metric');
+        if (index === 0) item.classList.add('ul-ca-metric-status');
+    });
+
+    status.classList.add('ul-ca-state', 'idle');
+    status.setAttribute('aria-live', 'polite');
+}
+
+function setUplinkCAState(text, kind, title) {
+    const el = document.getElementById('ul-ca-status');
+    if (!el) return;
+
+    el.textContent = text;
+    el.className = `ul-ca-state ${kind || 'idle'}`;
+    el.title = title || text;
+}
+
 function fillUplinkCASummary(ca) {
     const ul = summarizeUplinkCA(ca);
-    let status = 'Inactive';
+    let status = 'No UL CA';
+    let statusKind = 'idle';
+    let statusTitle = 'No uplink carrier aggregation is currently reported.';
+
     if (ul.active) {
-        status = `Active (${ul.rat} ${ul.ccCount}CC)`;
+        status = `UL ${ul.ccCount}CA active`;
+        statusKind = 'ok';
+        statusTitle = `${ul.rat} uplink carrier aggregation is active across ${ul.ccCount} component carriers.`;
+    } else if (ul.lteCount && ul.nrCount) {
+        status = 'EN-DC UL';
+        statusKind = 'warn';
+        statusTitle = 'LTE and NR uplink legs are active, but this is not same-RAT uplink carrier aggregation.';
     } else if (ul.lteCount || ul.nrCount || ul.unknownCount) {
-        status = 'Single-carrier UL';
-        if (ul.lteCount && ul.nrCount) status = 'EN-DC UL (not same-RAT CA)';
+        status = 'Single UL carrier';
+        statusKind = 'idle';
+        statusTitle = 'Only one same-RAT uplink carrier is currently active.';
     }
 
     const counts = [];
@@ -61,7 +99,7 @@ function fillUplinkCASummary(ca) {
     // uplink-active carrier so EN-DC remains visible without being called 2CA.
     const displayCarriers = ul.active ? ul.carriers : ul.allActive;
 
-    setText('ul-ca-status', status);
+    setUplinkCAState(status, statusKind, statusTitle);
     setText('ul-ca-carriers', counts.length ? counts.join(' · ') : '—');
     setText('ul-ca-bands', joinCarrierField(displayCarriers, 'band'));
     setText('ul-ca-mimo', joinCarrierField(displayCarriers, 'ul_mimo'));
@@ -82,9 +120,11 @@ function fillCATable(ca) {
         c.ul_mimo || '—',
         c.dl_modulation || '—',
         c.ul_modulation || '—',
-        c.ul_active ? (c.component === 'PCC' ? 'primary' : 'UL CA') : '—',
+        c.ul_active ? (c.component === 'PCC' ? 'Primary UL' : 'UL CA') : '—',
         c.rsrp ? c.rsrp + ' dBm' : '—',
         c.rsrq ? c.rsrq + ' dB' : '—',
         c.sinr ? c.sinr + ' dB' : '—'
     ]), 15, 'No CA data yet');
 }
+
+initUplinkCAUI();
