@@ -50,6 +50,16 @@ func ListMBIMDevices() []string {
 	return out
 }
 
+func readUSBID(sysPath string) (vendor, product string) {
+	if b, err := os.ReadFile(filepath.Join(sysPath, "idVendor")); err == nil {
+		vendor = domain.NormalizeUSBHex(string(b))
+	}
+	if b, err := os.ReadFile(filepath.Join(sysPath, "idProduct")); err == nil {
+		product = domain.NormalizeUSBHex(string(b))
+	}
+	return vendor, product
+}
+
 // ListUSBDevices returns every sysfs USB device matching vendor/product.
 func ListUSBDevices(vendor, product string) []string {
 	if vendor == "" {
@@ -69,7 +79,7 @@ func ListUSBDevices(vendor, product string) []string {
 		if errV != nil || errP != nil {
 			continue
 		}
-		if strings.TrimSpace(string(v)) == vendor && strings.TrimSpace(string(p)) == product {
+		if domain.MatchFM350Filter(vendor, product, strings.TrimSpace(string(v)), strings.TrimSpace(string(p))) {
 			out = append(out, m)
 		}
 	}
@@ -77,10 +87,21 @@ func ListUSBDevices(vendor, product string) []string {
 	return out
 }
 
+// resolveSysfs follows /sys/bus/usb/devices/* symlinks so Walk can descend.
+func resolveSysfs(sysPath string) string {
+	if sysPath == "" {
+		return sysPath
+	}
+	if real, err := filepath.EvalSymlinks(sysPath); err == nil && real != "" {
+		return real
+	}
+	return sysPath
+}
+
 // ttyNodesUnder walks a USB sysfs device tree for ttyUSB* names → /dev paths.
 func ttyNodesUnder(sysPath string) []string {
 	var names []string
-	_ = filepath.Walk(sysPath, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(resolveSysfs(sysPath), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
 		}
@@ -105,7 +126,7 @@ func ttyNodesUnder(sysPath string) []string {
 // mbimNodesUnder finds cdc-wdm nodes linked under a USB device sysfs tree.
 func mbimNodesUnder(sysPath string) []string {
 	var names []string
-	_ = filepath.Walk(sysPath, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(resolveSysfs(sysPath), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
 		}
@@ -124,7 +145,7 @@ func mbimNodesUnder(sysPath string) []string {
 // netIfacesUnder finds network interface names under a USB device (RNDIS/ECM/NCM).
 func netIfacesUnder(sysPath string) []string {
 	var names []string
-	_ = filepath.Walk(sysPath, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(resolveSysfs(sysPath), func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
 		}
@@ -360,6 +381,13 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 		}
 
 		base := filepath.Base(d.sys)
+		gotV, gotP := readUSBID(d.sys)
+		if gotV == "" {
+			gotV = vendor
+		}
+		if gotP == "" {
+			gotP = product
+		}
 		name := fmt.Sprintf("Fibocom FM350-GL @ %s", base)
 		if len(usbPaths) == 1 {
 			name = "Fibocom FM350-GL"
@@ -373,11 +401,14 @@ func ListModems(vendor, product, openATPort string) []domain.ModemDevice {
 		case domain.DataModeATOnly:
 			name += " [AT-only]"
 		}
+		if gotP != "" && gotP != product {
+			name += " (" + gotV + ":" + gotP + ")"
+		}
 		modems = append(modems, domain.ModemDevice{
 			ID:           "usb:" + d.sys,
 			Name:         name,
-			VendorID:     vendor,
-			ProductID:    product,
+			VendorID:     gotV,
+			ProductID:    gotP,
 			SysPath:      d.sys,
 			Connected:    true,
 			PowerControl: d.pwr,

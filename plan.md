@@ -91,6 +91,9 @@ A lightweight Go daemon and embedded WebUI to monitor, manage, and prevent disco
 - [x] LAN UI diagnostics table; docs runbook
 
 ## Optional / Later
+- [x] **RNDIS PDP static fallback**: `CGACT` + `CGPADDR`/`GTDNS` then `ip addr` if DHCP yields no IPv4 (still uses CLI `ip`; no resolv.conf rewrite)
+- [x] **Cells / CA / SINR / temperature / identity** from `GTCCINFO` / `GTCAINFO` / `GTSENRDTEMP` / `CGM*`
+- [x] **WAN iface counters** from sysfs (`rx_bytes` / `tx_bytes` + rate)
 - [ ] **Native netlink DHCP/static**: replace `dhclient`/`dhcpcd` shell-out with pure Go/netlink (large; still prefer CLI per AGENTS.md unless needed)
 - [ ] **True MBIM composition**: only if a firmware mode document lists a non-RNDIS profile for this SKU
 - [ ] **TLS / reverse-proxy examples** for remote access (token alone is not enough over the internet)

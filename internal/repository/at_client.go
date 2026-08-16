@@ -15,6 +15,7 @@ type Client struct {
 	portName string
 	port     serial.Port
 	mu       sync.Mutex
+	ident    domain.ModemIdentity // cached after first successful identity poll
 }
 
 func NewClient(portName string) *Client {
@@ -38,6 +39,7 @@ func (c *Client) SetPortName(name string) {
 		c.port = nil
 	}
 	c.portName = name
+	c.ident = domain.ModemIdentity{}
 }
 
 func (c *Client) Connected() bool {
@@ -166,14 +168,15 @@ func (c *Client) sendRawLocked(cmd string) (string, error) {
 	return strings.TrimSpace(string(resp)), nil
 }
 
-func (c *Client) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error) {
+func (c *Client) GetFullStatus() (domain.ATPoll, error) {
+	var poll domain.ATPoll
 	if err := c.EnsureConnected(); err != nil {
-		return domain.SignalInfo{}, domain.NetworkInfo{}, domain.SIMInfo{}, domain.APNConfig{}, "", err
+		return poll, err
 	}
 
 	csqResp, err := c.SendRaw(CmdCSQ)
 	if err != nil {
-		return domain.SignalInfo{}, domain.NetworkInfo{}, domain.SIMInfo{}, domain.APNConfig{}, "", err
+		return poll, err
 	}
 	cesqResp, _ := c.SendRaw(CmdCESQ)
 	copsResp, _ := c.SendRaw(CmdCOPS)
@@ -184,14 +187,16 @@ func (c *Client) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.
 	ccidResp, _ := c.SendRaw(CmdCCID)
 	cgdResp, _ := c.SendRaw(CmdCGDCONTQ)
 	gtactResp, _ := c.SendRaw(CmdGTACTQ)
+	tempResp, _ := c.SendRaw(CmdGTSENRDTEMP)
+	gtca, _ := c.SendRaw(CmdGTCAINFO)
+	gtcc, _ := c.SendRaw(CmdGTCCINFO)
 
-	sig := MergeExtendedSignal(ParseCSQ(csqResp), cesqResp)
-	// Proprietary Fibocom cell info when CESQ leaves RSRP empty.
-	if sig.RSRP == 0 {
-		gtca, _ := c.SendRaw(CmdGTCAINFO)
-		gtcc, _ := c.SendRaw(CmdGTCCINFO)
-		sig = MergeExtendedSignal(sig, "", gtca, gtcc)
-	}
+	sig := MergeExtendedSignal(ParseCSQ(csqResp), cesqResp, gtca, gtcc)
+	cells := ParseGTCCINFOCells(gtcc)
+	ca := ParseGTCAINFOComponents(gtca)
+	ca = CorrelateCAWithCells(ca, cells)
+	sig = ApplyServingCell(sig, cells)
+
 	oper := ParseCOPS(copsResp)
 	reg5g := ParseRegistration(c5gResp)
 	regLTE := ParseRegistration(clteResp)
@@ -205,6 +210,18 @@ func (c *Client) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.
 	}
 	apn := ParseCGDCONT(cgdResp)
 	rat := ParseGTACT(gtactResp)
+	if tempC, ok := ParseGTSENRDTEMP(tempResp); ok {
+		poll.TempC = tempC
+	}
+
+	cid := apn.CID
+	if cid <= 0 {
+		cid = 1
+	}
+	pdp, _ := c.QueryPDP(cid)
+	if apn.IPAddr == "" {
+		apn.IPAddr = pdp.IP
+	}
 
 	tech := domain.TechUnknown
 	regState := domain.RegNotRegistered
@@ -217,21 +234,99 @@ func (c *Client) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.
 		regState = regLTE
 	}
 
-	net := domain.NetworkInfo{
+	poll.Signal = sig
+	poll.Network = domain.NetworkInfo{
 		Operator: oper,
 		RegState: regState,
 		Tech:     tech,
 		Reg5G:    reg5g,
 		RegLTE:   regLTE,
 	}
-
-	sim := domain.SIMInfo{
+	poll.SIM = domain.SIMInfo{
 		State: simState,
 		IMSI:  imsi,
 		ICCID: iccid,
 	}
+	poll.APN = apn
+	poll.RATMode = rat
+	poll.Cells = cells
+	poll.CA = ca
+	poll.PDP = pdp
+	poll.Identity = c.pollIdentity()
+	return poll, nil
+}
 
-	return sig, net, sim, apn, rat, nil
+func (c *Client) pollIdentity() domain.ModemIdentity {
+	c.mu.Lock()
+	ident := c.ident
+	c.mu.Unlock()
+	if ident.IMEI != "" {
+		return ident
+	}
+	if resp, err := c.SendRaw(CmdCGMI); err == nil {
+		ident.Manufacturer = ParseInfoLine(resp)
+	}
+	if resp, err := c.SendRaw(CmdCGMM); err == nil {
+		ident.Model = ParseInfoLine(resp)
+	}
+	if resp, err := c.SendRaw(CmdCGMR); err == nil {
+		ident.Firmware = ParseInfoLine(resp)
+	}
+	if resp, err := c.SendRaw(CmdCGSN); err == nil {
+		ident.IMEI = ParseInfoLine(resp)
+	}
+	if ident.IMEI != "" || ident.Model != "" {
+		c.mu.Lock()
+		c.ident = ident
+		c.mu.Unlock()
+	}
+	return ident
+}
+
+func (c *Client) ActivatePDP(cid int) error {
+	if cid <= 0 {
+		cid = 1
+	}
+	if err := c.EnsureConnected(); err != nil {
+		return err
+	}
+	cmd := CmdCGACTSet(cid, true)
+	resp, err := c.SendRaw(cmd)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(resp, ATResultOK) {
+		return nil
+	}
+	// Already-active contexts often return ERROR; accept if an address exists.
+	sess, qerr := c.QueryPDP(cid)
+	if qerr == nil && sess.IP != "" {
+		return nil
+	}
+	return fmt.Errorf("%s failed: %s", cmd, resp)
+}
+
+func (c *Client) QueryPDP(cid int) (domain.PDPSession, error) {
+	sess := domain.PDPSession{CID: cid}
+	if cid <= 0 {
+		sess.CID = 1
+		cid = 1
+	}
+	if err := c.EnsureConnected(); err != nil {
+		return sess, err
+	}
+	addrResp, err := c.SendRaw(CmdCGPADDR(cid))
+	if err != nil {
+		return sess, err
+	}
+	sess.IP = ParseCGPADDR(addrResp)
+	if sess.IP != "" {
+		sess.Gateway = GuessIPv4Gateway(sess.IP)
+	}
+	if dnsResp, derr := c.SendRaw(CmdGTDNS(cid)); derr == nil {
+		sess.DNS1, sess.DNS2 = ParseGTDNS(dnsResp)
+	}
+	return sess, nil
 }
 
 func (c *Client) SetAPN(cid int, pdpType domain.PDPType, apn string) error {

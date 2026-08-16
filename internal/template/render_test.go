@@ -28,6 +28,14 @@ func TestRenderIndex_ShellAndPanels(t *testing.T) {
 		`/assets/boot.js`,
 		`id="modem-select"`,
 		`id="hotspot-ssid"`,
+		`id="sig-sinr"`,
+		`id="cells-table"`,
+		`id="ca-table"`,
+		"UL Bandwidth",
+		"DL Bandwidth",
+		"Uplink",
+		`id="pdp-ip"`,
+		`id="wan-method-select"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in rendered index", want)

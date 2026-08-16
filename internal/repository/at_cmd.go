@@ -8,22 +8,29 @@ import (
 
 // AT command strings and serial parameters.
 const (
-	CmdAT       = "AT"
-	CmdCSQ      = "AT+CSQ"
-	CmdCESQ     = "AT+CESQ"
-	CmdCOPS     = "AT+COPS?"
-	CmdC5GREG   = "AT+C5GREG?"
-	CmdCEREG    = "AT+CEREG?"
-	CmdCPIN     = "AT+CPIN?"
-	CmdCIMI     = "AT+CIMI"
-	CmdCCID     = "AT+CCID"
-	CmdICCID    = "AT+ICCID"
-	CmdCGDCONTQ = "AT+CGDCONT?"
-	CmdGTACTQ   = "AT+GTACT?"
+	CmdAT         = "AT"
+	CmdCSQ        = "AT+CSQ"
+	CmdCESQ       = "AT+CESQ"
+	CmdCOPS       = "AT+COPS?"
+	CmdC5GREG     = "AT+C5GREG?"
+	CmdCEREG      = "AT+CEREG?"
+	CmdCPIN       = "AT+CPIN?"
+	CmdCIMI       = "AT+CIMI"
+	CmdCCID       = "AT+CCID"
+	CmdICCID      = "AT+ICCID"
+	CmdCGDCONTQ   = "AT+CGDCONT?"
+	CmdGTACTQ     = "AT+GTACT?"
 	CmdGTUSBMODEQ = "AT+GTUSBMODE?"
 	// Proprietary Fibocom signal / cell info (fallback when CESQ is empty).
 	CmdGTCAINFO = "AT+GTCAINFO?"
 	CmdGTCCINFO = "AT+GTCCINFO?"
+	// Identity (polled once until IMEI is known).
+	CmdCGMI = "AT+CGMI"
+	CmdCGMM = "AT+CGMM"
+	CmdCGMR = "AT+CGMR"
+	CmdCGSN = "AT+CGSN"
+	// Temperature: +GTSENRDTEMP: 1,<milliC>
+	CmdGTSENRDTEMP = "AT+GTSENRDTEMP=1"
 
 	ATResultOK    = "OK"
 	ATResultERROR = "ERROR"
@@ -54,4 +61,32 @@ func CmdGTACTSet(code int) string {
 // CmdGTUSBMODESet builds AT+GTUSBMODE=<mode>.
 func CmdGTUSBMODESet(mode int) string {
 	return fmt.Sprintf("AT+GTUSBMODE=%d", mode)
+}
+
+// CmdCGPADDR builds AT+CGPADDR=<cid>.
+func CmdCGPADDR(cid int) string {
+	if cid <= 0 {
+		cid = 1
+	}
+	return fmt.Sprintf("AT+CGPADDR=%d", cid)
+}
+
+// CmdGTDNS builds AT+GTDNS=<cid> (query DNS for PDP context).
+func CmdGTDNS(cid int) string {
+	if cid <= 0 {
+		cid = 1
+	}
+	return fmt.Sprintf("AT+GTDNS=%d", cid)
+}
+
+// CmdCGACTSet builds AT+CGACT=<state>,<cid>.
+func CmdCGACTSet(cid int, active bool) string {
+	if cid <= 0 {
+		cid = 1
+	}
+	state := 0
+	if active {
+		state = 1
+	}
+	return fmt.Sprintf("AT+CGACT=%d,%d", state, cid)
 }

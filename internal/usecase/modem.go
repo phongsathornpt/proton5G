@@ -14,17 +14,17 @@ import (
 
 // ModemService is the application layer for modem monitor/control workflows.
 type ModemService struct {
-	usb       USBRepository
-	at        ATRepository
-	history   HistoryRepository
-	mbim      MBIMRepository
-	net       NetRepository
-	hotspot       HotspotRepository
-	discover      ATDiscoverer
-	inventory     DeviceInventory
-	vendor        string
-	product       string
-	hotspotFile   string // optional JSON path for HotspotConfig persistence
+	usb         USBRepository
+	at          ATRepository
+	history     HistoryRepository
+	mbim        MBIMRepository
+	net         NetRepository
+	hotspot     HotspotRepository
+	discover    ATDiscoverer
+	inventory   DeviceInventory
+	vendor      string
+	product     string
+	hotspotFile string // optional JSON path for HotspotConfig persistence
 
 	mu              sync.RWMutex
 	atMu            sync.Mutex // AT work queue: poll, control, rediscover, port lifecycle
@@ -43,19 +43,24 @@ type ModemService struct {
 	resetCooldown   time.Duration
 	rediscoverEvery time.Duration
 	failStreakMax   int
+
+	wanRx      uint64
+	wanTx      uint64
+	wanStatsAt time.Time
+	wanIface   string
 }
 
 type ModemServiceConfig struct {
-	USB              USBRepository
-	AT               ATRepository
-	History          HistoryRepository
-	MBIM             MBIMRepository
-	Net              NetRepository
-	Hotspot          HotspotRepository
-	Discover         ATDiscoverer
-	Inventory        DeviceInventory
-	Vendor           string
-	Product          string
+	USB               USBRepository
+	AT                ATRepository
+	History           HistoryRepository
+	MBIM              MBIMRepository
+	Net               NetRepository
+	Hotspot           HotspotRepository
+	Discover          ATDiscoverer
+	Inventory         DeviceInventory
+	Vendor            string
+	Product           string
 	HotspotConfigFile string // empty = no persistence
 }
 
@@ -78,7 +83,7 @@ func NewModemService(cfg ModemServiceConfig) *ModemService {
 		vendor:          cfg.Vendor,
 		product:         cfg.Product,
 		hotspotFile:     cfg.HotspotConfigFile,
-		resetCooldown:     appdefaults.ATResetCooldown,
+		resetCooldown:   appdefaults.ATResetCooldown,
 		rediscoverEvery: appdefaults.ATRediscoverEvery,
 		failStreakMax:   appdefaults.ATFailResetStreak,
 		hotspotCfg:      defaultHotspotConfig(),
@@ -145,12 +150,16 @@ func (s *ModemService) pollStatus() domain.FullStatus {
 		s.status.Signal = domain.SignalInfo{}
 		s.status.Network = domain.NetworkInfo{}
 		s.status.SIM = domain.SIMInfo{}
+		s.status.Cells = nil
+		s.status.CA = nil
+		s.status.TemperatureC = 0
 		s.status.Error = ""
 		if !modemStat.Connected {
 			s.status.Error = "modem disconnected"
 		}
 		s.status.UpdatedAt = now
 		s.atFailStreak = 0
+		s.refreshWANLocked(now)
 		st := s.status
 		s.mu.Unlock()
 		return st
@@ -163,14 +172,14 @@ func (s *ModemService) pollStatus() domain.FullStatus {
 	modemStat.PortPath = portPath
 
 	// AT I/O without holding s.mu (at.Client serializes on its own mutex).
-	sig, netInfo, sim, apn, rat, err := s.at.GetFullStatus()
+	poll, err := s.at.GetFullStatus()
 	if err != nil {
 		return s.handleATFailure(modemStat, err)
 	}
 
 	s.mu.Lock()
 	s.status.Modem = modemStat
-	st := s.applyATSuccessLocked(sig, netInfo, sim, apn, rat, now)
+	st := s.applyATSuccessLocked(poll, now)
 	s.mu.Unlock()
 	return st
 }
@@ -195,19 +204,21 @@ func (s *ModemService) handleATFailure(modemStat domain.ModemStatus, err error) 
 		return st
 	}
 
-	doRediscover := time.Since(s.lastRediscover) >= s.rediscoverEvery
+	// Empty/timeout on a mute interface (e.g. ttyUSB0 GNSS) should switch ports now.
+	wrongPort := strings.Contains(strings.ToLower(err.Error()), "empty at")
+	doRediscover := wrongPort || time.Since(s.lastRediscover) >= s.rediscoverEvery
 	if doRediscover {
 		s.lastRediscover = time.Now()
 		// Close/switch port while holding mu briefly; Discover may open serial — unlock first.
 		s.mu.Unlock()
 		s.rediscoverATPort()
-		sig, netInfo, sim, apn, rat, retryErr := s.at.GetFullStatus()
+		poll, retryErr := s.at.GetFullStatus()
 		s.mu.Lock()
 		if retryErr == nil {
 			if s.at != nil {
 				s.status.Modem.PortPath = s.at.PortName()
 			}
-			st := s.applyATSuccessLocked(sig, netInfo, sim, apn, rat, time.Now().UTC())
+			st := s.applyATSuccessLocked(poll, time.Now().UTC())
 			s.mu.Unlock()
 			return st
 		}
@@ -228,30 +239,63 @@ func (s *ModemService) handleATFailure(modemStat domain.ModemStatus, err error) 
 	return st
 }
 
-func (s *ModemService) applyATSuccessLocked(sig domain.SignalInfo, net domain.NetworkInfo, sim domain.SIMInfo, apn domain.APNConfig, rat domain.RATMode, now time.Time) domain.FullStatus {
+func (s *ModemService) applyATSuccessLocked(poll domain.ATPoll, now time.Time) domain.FullStatus {
 	s.atFailStreak = 0
-	s.status.Signal = sig
-	s.status.Network = net
-	s.status.SIM = sim
-	s.status.APN = apn
-	s.status.RATMode = rat
+	s.status.Signal = poll.Signal
+	s.status.Network = poll.Network
+	s.status.SIM = poll.SIM
+	s.status.APN = poll.APN
+	s.status.RATMode = poll.RATMode
+	s.status.Identity = poll.Identity
+	s.status.TemperatureC = poll.TempC
+	s.status.Cells = poll.Cells
+	s.status.CA = poll.CA
+	s.status.PDP = poll.PDP
+	if s.status.APN.IPAddr == "" {
+		s.status.APN.IPAddr = poll.PDP.IP
+	}
 	s.status.Error = ""
 	s.status.UpdatedAt = now
 	if s.at != nil {
 		s.status.Modem.PortPath = s.at.PortName()
 	}
 
+	sig := poll.Signal
 	if s.history != nil && (sig.RSSI != 0 || sig.Percentage != 0 || sig.RSRP != 0) {
 		s.history.Add(domain.SignalSample{
 			Timestamp:  now,
 			RSSI:       sig.RSSI,
 			RSRP:       sig.RSRP,
 			RSRQ:       sig.RSRQ,
+			SINR:       sig.SINR,
 			Percentage: sig.Percentage,
-			Tech:       net.Tech,
+			Tech:       poll.Network.Tech,
 		})
 	}
+	s.refreshWANLocked(now)
 	return s.status
+}
+
+func (s *ModemService) refreshWANLocked(now time.Time) {
+	iface := s.selectedNet
+	wan := s.status.WAN
+	wan.Iface = iface
+	if s.net == nil || iface == "" {
+		s.status.WAN = wan
+		return
+	}
+	wan.Addrs = s.net.IfaceAddrs(iface)
+	rx, tx := s.net.IfaceCounters(iface)
+	wan.RxBytes, wan.TxBytes = rx, tx
+	if s.wanIface == iface && !s.wanStatsAt.IsZero() {
+		dt := now.Sub(s.wanStatsAt).Seconds()
+		if dt >= 0.5 && rx >= s.wanRx && tx >= s.wanTx {
+			wan.RxRateBps = int64(float64(rx-s.wanRx) / dt)
+			wan.TxRateBps = int64(float64(tx-s.wanTx) / dt)
+		}
+	}
+	s.wanRx, s.wanTx, s.wanStatsAt, s.wanIface = rx, tx, now, iface
+	s.status.WAN = wan
 }
 
 func (s *ModemService) logPermissionOnceLocked(err error) {
@@ -646,6 +690,7 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 	if apn == "" {
 		apn = s.status.APN.APN
 	}
+	cid := s.status.APN.CID
 	s.mu.RUnlock()
 
 	if mode == "" || mode == "auto" {
@@ -664,7 +709,14 @@ func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error
 		if s.net == nil {
 			return "", fmt.Errorf("RNDIS net helper not configured")
 		}
-		return s.net.ConnectRNDIS(iface)
+		out, err := s.connectRNDIS(iface, req.Method, cid)
+		if err == nil {
+			s.mu.Lock()
+			s.status.WAN.Iface = iface
+			s.status.WAN.Session = "connected"
+			s.mu.Unlock()
+		}
+		return out, err
 	case domain.DataModeMBIM:
 		if s.mbim == nil {
 			return "", errModemUnavailable
@@ -707,7 +759,12 @@ func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, er
 		if s.net == nil {
 			return "", fmt.Errorf("RNDIS net helper not configured")
 		}
-		return s.net.DisconnectRNDIS(iface)
+		out, err := s.net.DisconnectRNDIS(iface)
+		s.mu.Lock()
+		s.status.WAN.Session = "disconnected"
+		s.status.WAN.Method = ""
+		s.mu.Unlock()
+		return out, err
 	case domain.DataModeMBIM:
 		if s.mbim == nil {
 			return "", errModemUnavailable
@@ -716,6 +773,81 @@ func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, er
 	default:
 		return "", fmt.Errorf("unknown data mode %q", mode)
 	}
+}
+
+// connectRNDIS activates the PDP context, then DHCP, then static CGPADDR fallback.
+func (s *ModemService) connectRNDIS(iface, method string, cid int) (string, error) {
+	method = strings.ToLower(strings.TrimSpace(method))
+	if method == "" {
+		method = domain.DataMethodAuto
+	}
+	if cid <= 0 {
+		cid = appdefaults.DefaultCID
+	}
+
+	var pdp domain.PDPSession
+	if s.at != nil {
+		_ = s.withAT(func() error {
+			_ = s.at.ActivatePDP(cid)
+			sess, qerr := s.at.QueryPDP(cid)
+			if qerr == nil {
+				pdp = sess
+			}
+			return nil
+		})
+		s.mu.Lock()
+		if pdp.IP != "" {
+			s.status.PDP = pdp
+			if s.status.APN.IPAddr == "" {
+				s.status.APN.IPAddr = pdp.IP
+			}
+		}
+		s.mu.Unlock()
+	}
+
+	var notes []string
+	if pdp.IP != "" {
+		notes = append(notes, "PDP "+pdp.IP)
+	}
+
+	tryDHCP := method == domain.DataMethodAuto || method == domain.DataMethodDHCP
+	tryStatic := method == domain.DataMethodAuto || method == domain.DataMethodStatic
+
+	if tryDHCP {
+		out, err := s.net.ConnectRNDIS(iface)
+		notes = append(notes, strings.TrimSpace(out))
+		addrs := s.net.IfaceAddrs(iface)
+		if err == nil && (len(addrs) > 0 || !tryStatic || pdp.IP == "") {
+			s.setWANMethod(domain.DataMethodDHCP)
+			return strings.TrimSpace(strings.Join(notes, "\n")), nil
+		}
+		if err != nil {
+			notes = append(notes, "dhcp: "+err.Error())
+		}
+		if !tryStatic || pdp.IP == "" {
+			return strings.TrimSpace(strings.Join(notes, "\n")), err
+		}
+	}
+
+	if !tryStatic {
+		return strings.TrimSpace(strings.Join(notes, "\n")), fmt.Errorf("static PDP requested but no method match")
+	}
+	if pdp.IP == "" {
+		return strings.TrimSpace(strings.Join(notes, "\n")), fmt.Errorf("no PDP IPv4 from AT+CGPADDR (set APN / wait for attach)")
+	}
+	staticOut, err := s.net.ConnectRNDISStatic(iface, pdp.IP+"/24", pdp.Gateway)
+	notes = append(notes, strings.TrimSpace(staticOut))
+	if err != nil {
+		return strings.TrimSpace(strings.Join(notes, "\n")), err
+	}
+	s.setWANMethod(domain.DataMethodStatic)
+	return strings.TrimSpace(strings.Join(notes, "\n")), nil
+}
+
+func (s *ModemService) setWANMethod(method string) {
+	s.mu.Lock()
+	s.status.WAN.Method = method
+	s.mu.Unlock()
 }
 
 // USBMode queries AT+GTUSBMODE? and returns known profiles for the UI.

@@ -29,9 +29,9 @@ type HotspotConfig struct {
 	Password    string `json:"password"`
 	WlanIface   string `json:"wlan_iface"`
 	UplinkIface string `json:"uplink_iface,omitempty"` // empty = selected RNDIS net
-	Channel     int    `json:"channel"`               // 0 = default
-	Band        string `json:"band"`                  // "2.4" | "5"
-	LANCIDR     string `json:"lan_cidr"`              // e.g. 192.168.50.1/24
+	Channel     int    `json:"channel"`                // 0 = default
+	Band        string `json:"band"`                   // "2.4" | "5"
+	LANCIDR     string `json:"lan_cidr"`               // e.g. 192.168.50.1/24
 	Country     string `json:"country,omitempty"`
 }
 
@@ -74,18 +74,18 @@ type HotspotClient struct {
 
 // HotspotStatus is the WebUI/API snapshot for the software AP.
 type HotspotStatus struct {
-	State        string              `json:"state"`
-	Config       HotspotConfig       `json:"config"`
-	Uplink       string              `json:"uplink_iface,omitempty"`
-	UplinkAddrs  []string            `json:"uplink_addrs,omitempty"`
-	LANAddrs     []string            `json:"lan_addrs,omitempty"`
-	Tools        HotspotTools        `json:"tools"`
-	InstallHint  string              `json:"install_hint,omitempty"`
-	Devices      []WiFiDevice        `json:"devices,omitempty"`
-	Diagnostics  HotspotDiagnostics  `json:"diagnostics,omitempty"`
-	Clients      []HotspotClient     `json:"clients,omitempty"`
-	Error        string              `json:"error,omitempty"`
-	Note         string              `json:"note,omitempty"`
+	State       string             `json:"state"`
+	Config      HotspotConfig      `json:"config"`
+	Uplink      string             `json:"uplink_iface,omitempty"`
+	UplinkAddrs []string           `json:"uplink_addrs,omitempty"`
+	LANAddrs    []string           `json:"lan_addrs,omitempty"`
+	Tools       HotspotTools       `json:"tools"`
+	InstallHint string             `json:"install_hint,omitempty"`
+	Devices     []WiFiDevice       `json:"devices,omitempty"`
+	Diagnostics HotspotDiagnostics `json:"diagnostics,omitempty"`
+	Clients     []HotspotClient    `json:"clients,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	Note        string             `json:"note,omitempty"`
 }
 
 // HotspotStartRequest optionally overrides config fields for start.

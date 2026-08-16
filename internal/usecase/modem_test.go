@@ -24,23 +24,24 @@ func (f *fakeUSB) HardReset(string) error {
 }
 
 type fakeAT struct {
-	port  string
-	failN int
-	calls int
-	sig   domain.SignalInfo
-	net   domain.NetworkInfo
+	port   string
+	failN  int
+	calls  int
+	sig    domain.SignalInfo
+	net    domain.NetworkInfo
+	pdp    domain.PDPSession
 	closed int
 }
 
-func (f *fakeAT) PortName() string                     { return f.port }
-func (f *fakeAT) SetPortName(n string)                 { f.port = n }
-func (f *fakeAT) Close() error                         { f.closed++; return nil }
-func (f *fakeAT) Connect() error                       { return nil }
-func (f *fakeAT) EnsureConnected() error               { return nil }
+func (f *fakeAT) PortName() string                         { return f.port }
+func (f *fakeAT) SetPortName(n string)                     { f.port = n }
+func (f *fakeAT) Close() error                             { f.closed++; return nil }
+func (f *fakeAT) Connect() error                           { return nil }
+func (f *fakeAT) EnsureConnected() error                   { return nil }
 func (f *fakeAT) SetAPN(int, domain.PDPType, string) error { return nil }
-func (f *fakeAT) SetRATMode(domain.RATModePref) error  { return nil }
-func (f *fakeAT) SendRaw(string) (string, error)       { return "OK", nil }
-func (f *fakeAT) GetUSBMode() (int, error)             { return domain.USBModeRNDIS41, nil }
+func (f *fakeAT) SetRATMode(domain.RATModePref) error      { return nil }
+func (f *fakeAT) SendRaw(string) (string, error)           { return "OK", nil }
+func (f *fakeAT) GetUSBMode() (int, error)                 { return domain.USBModeRNDIS41, nil }
 func (f *fakeAT) SetUSBMode(mode int) error {
 	if mode <= 0 {
 		return errors.New("bad mode")
@@ -48,12 +49,23 @@ func (f *fakeAT) SetUSBMode(mode int) error {
 	f.closed++
 	return nil
 }
-func (f *fakeAT) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error) {
+func (f *fakeAT) ActivatePDP(int) error { return nil }
+func (f *fakeAT) QueryPDP(int) (domain.PDPSession, error) {
+	return f.pdp, nil
+}
+func (f *fakeAT) GetFullStatus() (domain.ATPoll, error) {
 	f.calls++
 	if f.calls <= f.failN {
-		return domain.SignalInfo{}, domain.NetworkInfo{}, domain.SIMInfo{}, domain.APNConfig{}, "", errors.New("at fail")
+		return domain.ATPoll{}, errors.New("at fail")
 	}
-	return f.sig, f.net, domain.SIMInfo{State: domain.SIMReady}, domain.APNConfig{APN: "internet", PDPType: domain.PDPIPV4V6}, domain.RATModeAuto, nil
+	return domain.ATPoll{
+		Signal:  f.sig,
+		Network: f.net,
+		SIM:     domain.SIMInfo{State: domain.SIMReady},
+		APN:     domain.APNConfig{APN: "internet", PDPType: domain.PDPIPV4V6},
+		RATMode: domain.RATModeAuto,
+		PDP:     f.pdp,
+	}, nil
 }
 
 type fakeHist struct {
@@ -81,6 +93,27 @@ func TestStatusDisconnected(t *testing.T) {
 	st := svc.Status()
 	if st.Error != "modem disconnected" {
 		t.Fatalf("got %q", st.Error)
+	}
+}
+
+func TestStatusCopiesExtendedFields(t *testing.T) {
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true, SysPath: "/sys/x"}},
+		AT: &fakeAT{
+			port: "/dev/ttyUSB2",
+			sig:  domain.SignalInfo{RSSI: -70, RSRP: -90, SINR: 8, Percentage: 50},
+			net:  domain.NetworkInfo{Tech: domain.TechLTE},
+			pdp:  domain.PDPSession{IP: "10.8.0.2", DNS1: "8.8.8.8", Gateway: "10.8.0.1"},
+		},
+		Net: &fakeNet{addrs: []string{"10.8.0.2"}, rx: 1000, tx: 200},
+	})
+	svc.selectedNet = "enxabc"
+	st := svc.Status()
+	if st.Signal.SINR != 8 || st.PDP.IP != "10.8.0.2" || st.APN.IPAddr != "10.8.0.2" {
+		t.Fatalf("extended fields: %+v pdp=%+v apn=%+v", st.Signal, st.PDP, st.APN)
+	}
+	if st.WAN.Iface != "enxabc" || st.WAN.RxBytes != 1000 || len(st.WAN.Addrs) != 1 {
+		t.Fatalf("wan %+v", st.WAN)
 	}
 }
 
@@ -193,9 +226,12 @@ func (f *fakeATPerm) SetUSBMode(int) error {
 func (f *fakeATPerm) SendRaw(string) (string, error) {
 	return "", errors.New("permission denied")
 }
-func (f *fakeATPerm) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error) {
-	return domain.SignalInfo{}, domain.NetworkInfo{}, domain.SIMInfo{}, domain.APNConfig{}, "",
-		errors.New("open serial port /dev/ttyUSB0: Permission denied")
+func (f *fakeATPerm) ActivatePDP(int) error { return errors.New("permission denied") }
+func (f *fakeATPerm) QueryPDP(int) (domain.PDPSession, error) {
+	return domain.PDPSession{}, errors.New("permission denied")
+}
+func (f *fakeATPerm) GetFullStatus() (domain.ATPoll, error) {
+	return domain.ATPoll{}, errors.New("open serial port /dev/ttyUSB0: Permission denied")
 }
 
 func TestSetAPNInvalidPDP(t *testing.T) {
@@ -212,19 +248,36 @@ func TestSetAPNInvalidPDP(t *testing.T) {
 type fakeNet struct {
 	lastConnect    string
 	lastDisconnect string
+	lastStatic     string
+	lastStaticAddr string
+	lastStaticGW   string
 	connectOut     string
 	connectErr     error
+	staticOut      string
+	staticErr      error
+	addrs          []string
+	rx, tx         uint64
 }
 
 func (f *fakeNet) ConnectRNDIS(iface string) (string, error) {
 	f.lastConnect = iface
 	return f.connectOut, f.connectErr
 }
+func (f *fakeNet) ConnectRNDISStatic(iface, addr, gw string) (string, error) {
+	f.lastStatic = iface
+	f.lastStaticAddr = addr
+	f.lastStaticGW = gw
+	if f.staticOut == "" && f.staticErr == nil {
+		return "static ok", nil
+	}
+	return f.staticOut, f.staticErr
+}
 func (f *fakeNet) DisconnectRNDIS(iface string) (string, error) {
 	f.lastDisconnect = iface
 	return "down", nil
 }
-func (f *fakeNet) IfaceAddrs(string) []string { return nil }
+func (f *fakeNet) IfaceAddrs(string) []string            { return f.addrs }
+func (f *fakeNet) IfaceCounters(string) (uint64, uint64) { return f.rx, f.tx }
 
 type fakeMBIM struct {
 	lastConnectDev string
@@ -250,9 +303,9 @@ type fakeInventory struct {
 }
 
 func (f *fakeInventory) ListModems(_, _, _ string) []domain.ModemDevice { return f.modems }
-func (f *fakeInventory) ListMBIMDevices() []string                     { return nil }
-func (f *fakeInventory) MBIMCLIAvailable() bool                        { return true }
-func (f *fakeInventory) MBIMInstallHint() string                       { return "" }
+func (f *fakeInventory) ListMBIMDevices() []string                      { return nil }
+func (f *fakeInventory) MBIMCLIAvailable() bool                         { return true }
+func (f *fakeInventory) MBIMInstallHint() string                        { return "" }
 
 func TestDataConnectRNDIS(t *testing.T) {
 	net := &fakeNet{connectOut: "dhcp ok"}
@@ -346,6 +399,52 @@ func TestDataConnectUnknownMode(t *testing.T) {
 	_, err := svc.DataConnect(domain.DataConnectRequest{Mode: "ppp", Iface: "x"})
 	if err == nil {
 		t.Fatal("expected error for unknown mode")
+	}
+}
+
+func TestDataConnectRNDISStaticFallback(t *testing.T) {
+	net := &fakeNet{connectErr: errors.New("dhcp timeout")}
+	at := &fakeAT{port: "/dev/ttyUSB0", pdp: domain.PDPSession{IP: "10.64.1.8", Gateway: "10.64.1.1"}}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+		AT:  at,
+		Net: net,
+	})
+	out, err := svc.DataConnect(domain.DataConnectRequest{
+		Mode:  domain.DataModeRNDIS,
+		Iface: "enxabc",
+	})
+	if err != nil {
+		t.Fatalf("expected static fallback, err=%v out=%s", err, out)
+	}
+	if net.lastStatic != "enxabc" || net.lastStaticAddr != "10.64.1.8/24" {
+		t.Fatalf("static iface=%q addr=%q", net.lastStatic, net.lastStaticAddr)
+	}
+	if svc.CachedStatus().WAN.Method != domain.DataMethodStatic {
+		t.Fatalf("method=%q", svc.CachedStatus().WAN.Method)
+	}
+}
+
+func TestDataConnectRNDISStaticOnly(t *testing.T) {
+	net := &fakeNet{connectErr: errors.New("should not dhcp")}
+	at := &fakeAT{port: "/dev/ttyUSB0", pdp: domain.PDPSession{IP: "10.1.2.3", Gateway: "10.1.2.1"}}
+	svc := NewModemService(ModemServiceConfig{
+		USB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+		AT:  at,
+		Net: net,
+	})
+	if _, err := svc.DataConnect(domain.DataConnectRequest{
+		Mode:   domain.DataModeRNDIS,
+		Iface:  "enx1",
+		Method: domain.DataMethodStatic,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if net.lastConnect != "" {
+		t.Fatalf("dhcp should be skipped, last=%q", net.lastConnect)
+	}
+	if net.lastStatic != "enx1" {
+		t.Fatalf("static iface=%q", net.lastStatic)
 	}
 }
 
@@ -571,10 +670,22 @@ func (f *trackingAT) SetUSBMode(mode int) error {
 	return f.fakeAT.SetUSBMode(mode)
 }
 
-func (f *trackingAT) GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error) {
+func (f *trackingAT) GetFullStatus() (domain.ATPoll, error) {
 	f.enter()
 	defer f.leave()
 	return f.fakeAT.GetFullStatus()
+}
+
+func (f *trackingAT) ActivatePDP(cid int) error {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.ActivatePDP(cid)
+}
+
+func (f *trackingAT) QueryPDP(cid int) (domain.PDPSession, error) {
+	f.enter()
+	defer f.leave()
+	return f.fakeAT.QueryPDP(cid)
 }
 
 func (f *trackingAT) Close() error {

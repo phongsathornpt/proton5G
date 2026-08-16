@@ -16,12 +16,14 @@ type ATRepository interface {
 	Close() error
 	Connect() error
 	EnsureConnected() error
-	GetFullStatus() (domain.SignalInfo, domain.NetworkInfo, domain.SIMInfo, domain.APNConfig, domain.RATMode, error)
+	GetFullStatus() (domain.ATPoll, error)
 	SetAPN(cid int, pdpType domain.PDPType, apn string) error
 	SetRATMode(pref domain.RATModePref) error
 	SendRaw(cmd string) (string, error)
 	GetUSBMode() (int, error)
 	SetUSBMode(mode int) error
+	ActivatePDP(cid int) error
+	QueryPDP(cid int) (domain.PDPSession, error)
 }
 
 // HistoryRepository abstracts signal sample storage.
@@ -42,8 +44,10 @@ type MBIMRepository interface {
 // NetRepository abstracts RNDIS/ECM network iface bring-up and address query.
 type NetRepository interface {
 	ConnectRNDIS(iface string) (string, error)
+	ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error)
 	DisconnectRNDIS(iface string) (string, error)
 	IfaceAddrs(iface string) []string
+	IfaceCounters(iface string) (rx, tx uint64)
 }
 
 // ATDiscoverer finds a working AT serial port.

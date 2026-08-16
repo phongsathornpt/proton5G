@@ -1,6 +1,6 @@
 # fm350-monitor
 
-Lightweight **Linux** Go daemon + embedded WebUI for the **Fibocom FM350-GL** 5G USB modem (`0e8d:7127`).
+Lightweight **Linux** Go daemon + embedded WebUI for the **Fibocom FM350-GL** 5G USB modem (`0e8d:7127` or `0e8d:7126`).
 
 It keeps USB power stable (autosuspend / `power/control`), talks **AT** over serial, exposes a live dashboard (SSE), can bring up a **data path** when the modem presents RNDIS (network iface) or MBIM (`/dev/cdc-wdm*`), and can share that LTE uplink as a **WiFi hotspot** (hostapd + NAT).
 
@@ -19,7 +19,7 @@ It keeps USB power stable (autosuspend / `power/control`), talks **AT** over ser
 - **AT client** — multi-`ttyUSB` probe, reconnect, signal/SIM/APN/RAT, raw AT console
 - **Modem inventory UI** — dropdown of devices, AT ports, data interfaces
 - **Data bearer**
-  - **RNDIS** (common on FM350 USB): `ip link up` + DHCP
+  - **RNDIS** (common on FM350 USB): `ip link up` + DHCP, then **PDP static** from `AT+CGPADDR` if DHCP assigns nothing
   - **MBIM** (if present): optional `mbimcli`
 - **WiFi hotspot** — host WiFi AP (hostapd) + DHCP (dnsmasq) + NAT to LTE/RNDIS uplink
 - **Router-style WebUI** — Overview / Cellular / WAN / LAN / Advanced panels
@@ -135,7 +135,10 @@ No out-of-tree modem driver is required by this project. Host WiFi must support 
 sudo usermod -aG dialout "$USER"   # then re-login
 ```
 
-Default: if not root, the process **re-execs under `sudo`** (`-no-elevate` to disable). Systemd unit runs as **root**.
+Default: if not root, the process **re-execs under `sudo`** (`-no-elevate` to
+disable). `make run` / `make dev` run **without root** by passing `-no-elevate`
+and local runtime/state dirs. Run `make setup` once to grant serial + sysfs
+access to your user (see below). Systemd unit runs as **root**.
 
 ### 5. Not required
 
@@ -175,6 +178,49 @@ Open **http://127.0.0.1:8080**
 | `-history-file` | _(empty)_ | Persist history JSON |
 | `-no-elevate` | false | Do not re-exec with sudo |
 | `-token` | _(empty)_ | Shared API token (also `FM350_API_TOKEN`) |
+
+### Development (Make + Air live reload)
+
+```bash
+make build          # go build -o fm350-manager ./cmd/app
+make run            # build + run on 0.0.0.0:8080 (no sudo)
+make run-sudo       # same, as root (AT / WAN DHCP-or-static / hotspot)
+make test           # go test ./...
+make check          # gofmt check + go vet + tests
+make help           # targets + BIND/PORT/SERIAL/ARGS
+```
+
+`make run BIND=0.0.0.0 PORT=8080 SERIAL=/dev/ttyUSB2` overrides listen/AT port.
+History is written to `.state/history.json`. Extra flags: `ARGS='-poll 5s'`.
+
+`make run` and `make dev` never elevate. They pass `-no-elevate` and point
+`RUNTIME_DIRECTORY`/`STATE_DIRECTORY` at gitignored `./.runtime` / `./.state`, so
+hotspot conf, logs, history, and `hotspot.json` all stay in the repo and are
+user-writable. One-time permissions for the USB modem:
+
+```bash
+make setup   # adds $USER to dialout + installs udev rules for sysfs/USB reset/MBIM
+             # then re-login (or run: newgrp dialout)
+```
+
+After `make setup`, AT monitoring, USB hard reset, and MBIM work without root.
+RNDIS DHCP, hostapd/dnsmasq, and NAT still need root — use the systemd unit for
+full router functionality. If you do run as root, keep the defaults: the daemon
+auto-elevates, `/run/fm350-manager` + `/var/lib/fm350-manager` are used, and
+`make run` is just `./fm350-manager -bind 127.0.0.1 -port 8080`.
+
+Live reload with [Air](https://github.com/air-verse/air):
+
+```bash
+go install github.com/air-verse/air@latest   # one-time install (adds ~/go/bin to PATH if needed)
+make dev            # rebuilds + restarts on .go changes; UI assets are embedded, no restart needed
+```
+
+`make dev` runs the app with `-no-elevate` and local runtime/state dirs baked
+into `.air.toml`, so the daemon never re-execs under `sudo` mid-reload and never
+touches `/run` or `/var/lib`. Air builds into `./tmp/` and writes
+`build-errors.log` on failure — all gitignored. Extra flags (e.g.
+`-serial /dev/ttyUSB2 -poll 5s`) go in `args_bin` in `.air.toml`.
 
 ### Auth (optional)
 
@@ -252,7 +298,7 @@ Details: [`docs/architecture.md`](docs/architecture.md), [`docs/at-command-guide
 | POST | `/api/rat` | RAT pref (`5g`/`lte`/`auto`) |
 | POST | `/api/raw` | Raw AT |
 | POST | `/api/reset` | USB hard reset |
-| POST | `/api/data/connect` | RNDIS DHCP or MBIM connect |
+| POST | `/api/data/connect` | RNDIS (`method`: auto/dhcp/static) or MBIM connect |
 | POST | `/api/data/disconnect` | Tear down data path |
 | GET | `/api/hotspot` | Hotspot status + tools + WiFi devices |
 | POST | `/api/hotspot/start` | Start WPA2 AP + NAT to RNDIS uplink |

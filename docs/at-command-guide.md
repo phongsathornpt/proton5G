@@ -41,6 +41,13 @@ Or via the WebUI **USB Hard Reset** button / `POST /api/reset` (requires privile
 | Force 5G NR | `AT+GTACT=14` | `OK` |
 | Force LTE | `AT+GTACT=4` | `OK` |
 | Set Auto Mode | `AT+GTACT=20` | `OK` |
+| Activate PDP | `AT+CGACT=1,1` | `OK` (ERROR if already active is ignored when `CGPADDR` has an IP) |
+| PDP address | `AT+CGPADDR=1` | `+CGPADDR: 1,"10.x.x.x"` |
+| PDP DNS | `AT+GTDNS=1` | `+GTDNS: 1,"…","…"` |
+| Temperature | `AT+GTSENRDTEMP=1` | `+GTSENRDTEMP: 1,<milli-°C>` |
+| Cells | `AT+GTCCINFO?` | serving + neighbors |
+| Carrier aggregation | `AT+GTCAINFO?` | `PCC:` / `SCC:` lines |
+| Identity | `AT+CGMI` / `CGMM` / `CGMR` / `CGSN` | manufacturer / model / FW / IMEI |
 
 ### Multi-interface serial
 
@@ -51,8 +58,13 @@ FM350 often exposes several `/dev/ttyUSB*`. The manager probes candidates with `
 Status polling uses:
 
 1. `AT+CSQ` (RSSI)
-2. `AT+CESQ` (RSRP/RSRQ when available)
-3. Fallback: `AT+GTCAINFO?` then `AT+GTCCINFO?` (Fibocom cell info) when CESQ has no RSRP
+2. `AT+CESQ` — **3GPP** `+CESQ: <rxlev>,<ber>,<rscp>,<ecno>,<rsrq>,<rsrp>` (RSRP = raw−140). This is not the vendor-GUI field order.
+3. `AT+GTCAINFO?` / `AT+GTCCINFO?` every poll for cells, CA, and RSRP/SINR fallback
+4. `AT+GTSENRDTEMP=1` (temperature)
+5. `AT+CGPADDR` / `AT+GTDNS` (PDP IP + DNS; gateway is guessed as `a.b.c.1`)
+6. Identity (`CGMI`/`CGMM`/`CGMR`/`CGSN`) once until IMEI is cached
+
+`AT+CESQ` has **no SINR**. SINR comes from `GTCCINFO` (0.5 dB units → integer dB).
 
 ## USB composition (`AT+GTUSBMODE`)
 
@@ -79,7 +91,13 @@ mbimcli -d /dev/cdc-wdm0 --simple-connect="apn='your.apn'"
 mbimcli -d /dev/cdc-wdm0 --disconnect
 ```
 
-RNDIS path uses `ip link` + `dhclient`/`dhcpcd` and shows assigned IPv4 on the inventory label when present.
+RNDIS **Connect** (default `method=auto`):
+
+1. `AT+CGACT=1,<cid>` then `AT+CGPADDR` / `AT+GTDNS`
+2. `ip link up` + `dhclient`/`dhcpcd`
+3. If the iface has no IPv4 and the modem reported a PDP address: assign `CGPADDR/24` and add `default via a.b.c.1 metric 100`
+
+`method=dhcp` skips static. `method=static` skips DHCP. The daemon does **not** rewrite `/etc/resolv.conf` or stop ModemManager. PDP DNS is shown in the WAN panel only.
 
 ## Run
 

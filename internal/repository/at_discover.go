@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"fm350-monitor/internal/pkg/domain"
+
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 )
@@ -17,16 +19,13 @@ func ListCandidatePorts(vendor, product string) ([]string, error) {
 	var usbMatches []string
 	var others []string
 
-	targetVendor := strings.ToUpper(vendor)
-	targetProduct := strings.ToUpper(product)
-
 	ports, err := enumerator.GetDetailedPortsList()
 	if err == nil {
 		for _, p := range ports {
 			if !p.IsUSB || p.Name == "" {
 				continue
 			}
-			if strings.ToUpper(p.VID) == targetVendor && strings.ToUpper(p.PID) == targetProduct {
+			if domain.MatchFM350Filter(vendor, product, p.VID, p.PID) {
 				if _, ok := seen[p.Name]; !ok {
 					seen[p.Name] = struct{}{}
 					usbMatches = append(usbMatches, p.Name)
@@ -117,8 +116,9 @@ func DiscoverATPort(vendor, product string) (string, error) {
 		}
 	}
 
-	// No port answered AT — return first candidate for later retry by status poller.
-	return candidates[0], nil
+	// Do not bind the first ttyUSB* just because it exists — on FM350 that is
+	// often GNSS/log. Poller will rediscover when permissions or USB change.
+	return "", nil
 }
 
 // DiscoverATPortPrefer keeps preferred if it still answers AT; otherwise rediscovers.

@@ -34,6 +34,8 @@
                 <div class="info-item"><span>RSSI:</span> <strong id="sig-rssi">-</strong></div>
                 <div class="info-item"><span>RSRP:</span> <strong id="sig-rsrp">-</strong></div>
                 <div class="info-item"><span>RSRQ:</span> <strong id="sig-rsrq">-</strong></div>
+                <div class="info-item"><span>SINR:</span> <strong id="sig-sinr">-</strong></div>
+                <div class="info-item"><span>Temperature:</span> <strong id="modem-temp">-</strong></div>
                 <div class="info-item"><span>Serial:</span> <strong id="modem-port">-</strong></div>
                 <div class="info-item"><span>Power:</span> <strong id="modem-power">-</strong></div>
             </div>
@@ -52,6 +54,52 @@
                 <button type="button" onclick="setRAT('lte')">Force LTE</button>
                 <button type="button" onclick="setRAT('auto')">Auto mode</button>
             </div>
+        </section>
+        <section class="card">
+            <h2>Identity</h2>
+            <div class="info-list">
+                <div class="info-item"><span>Manufacturer:</span> <strong id="ident-manufacturer">-</strong></div>
+                <div class="info-item"><span>Model:</span> <strong id="ident-model">-</strong></div>
+                <div class="info-item"><span>Firmware:</span> <strong id="ident-firmware">-</strong></div>
+                <div class="info-item"><span>IMEI:</span> <strong id="ident-imei">-</strong></div>
+            </div>
+        </section>
+        <section class="card full-width">
+            <h2>Cells</h2>
+            <div class="table-wrap">
+                <table class="data-table" id="cells-table">
+                    <thead>
+                        <tr>
+                            <th>Serving</th><th>RAT</th><th>Cell ID</th><th>PCI</th>
+                            <th>Band</th><th>ARFCN</th><th>RSRP</th><th>RSRQ</th><th>SINR</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cells-body">
+                        <tr><td colspan="9" class="muted">No cell data yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="hint">From AT+GTCCINFO. RSRP/RSRQ use 3GPP CESQ scaling; SINR is Fibocom 0.5 dB units.</p>
+        </section>
+        <section class="card full-width">
+            <h2>Carrier aggregation</h2>
+            <div class="table-wrap">
+                <table class="data-table" id="ca-table">
+                    <thead>
+                        <tr>
+                            <th>Component</th><th>Band</th><th>PCI</th>
+                            <th>DL ARFCN</th><th>UL ARFCN</th>
+                            <th>DL Bandwidth</th><th>UL Bandwidth</th>
+                            <th>DL Mod</th><th>UL Mod</th>
+                            <th>Uplink</th><th>RSRP</th><th>RSRQ</th><th>SINR</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ca-body">
+                        <tr><td colspan="13" class="muted">No CA data yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="hint">From AT+GTCAINFO correlated with AT+GTCCINFO. DL/UL bandwidth and modulation reflect active carrier aggregation channels.</p>
         </section>
     </div>
 </section>

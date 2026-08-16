@@ -13,7 +13,7 @@ import (
 func fixedStatus(pct int) func() domain.FullStatus {
 	return func() domain.FullStatus {
 		return domain.FullStatus{
-			Signal: domain.SignalInfo{Percentage: pct},
+			Signal:  domain.SignalInfo{Percentage: pct},
 			RATMode: domain.RATModeAuto,
 		}
 	}

@@ -28,7 +28,7 @@ cmd/app/main.go  --> flags, wiring, lifecycle
    - **Inventory**: USB tree → AT ports, MBIM (`cdc-wdm*`), net ifaces (RNDIS/ECM + IPv4 labels).
    - **History**: in-memory ring buffer + optional JSON file.
    - **MBIM**: optional `mbimcli` helper.
-   - **Net**: RNDIS path via `ip link` + `dhclient`/`dhcpcd`; `ip -4 addr` for labels.
+   - **Net**: RNDIS path via `ip link` + `dhclient`/`dhcpcd`, then optional static `CGPADDR/24`; sysfs byte counters.
    - **Hotspot**: host WiFi AP via `hostapd` + `dnsmasq` + nft/iptables NAT; `iw` discovery.
 
 2. **Usecase (`internal/usecase`)**
@@ -37,7 +37,7 @@ cmd/app/main.go  --> flags, wiring, lifecycle
    - `Status()` / `?fresh=1` — force one poll (tests, manual refresh).
    - Inventory selection: modem / AT port / RNDIS iface / MBIM device.
    - Control: APN, RAT, raw AT, USB reset, USB composition (`GTUSBMODE`).
-   - Data: unified `DataConnect` / `DataDisconnect` (RNDIS or MBIM); legacy MBIM methods remain.
+   - Data: unified `DataConnect` / `DataDisconnect` (RNDIS DHCP then PDP static, or MBIM); legacy MBIM methods remain.
    - **Hotspot**: `HotspotStart/Stop/Status` — WiFi AP NATed to RNDIS uplink (not under `atMu`).
    - Background `RunWatchdog` enforces USB presence/power without a browser open.
 
@@ -92,7 +92,7 @@ See [`docs/wifi-hotspot.md`](wifi-hotspot.md).
 
 | Modem composition | Kernel | Connect path |
 |-------------------|--------|--------------|
-| RNDIS + serial (common FM350) | `rndis_host` + `option` | `ip link up` + DHCP on net iface |
+| RNDIS + serial (common FM350) | `rndis_host` + `option` | `ip link up` + DHCP, then PDP static from `AT+CGPADDR` if no IPv4 |
 | MBIM | `cdc_mbim` | `mbimcli` on `/dev/cdc-wdm*` |
 | AT-only | serial only | monitoring only; no data UI targets |
 

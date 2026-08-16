@@ -3,9 +3,12 @@ package repository
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // NetLinkUp brings a network interface administratively up.
@@ -56,7 +59,60 @@ func ConnectRNDIS(iface string) (string, error) {
 	return combined, nil
 }
 
-// DisconnectRNDIS releases DHCP if possible and sets link down.
+// ConnectRNDISStatic brings the iface up and assigns a PDP IPv4 (/24 if no prefix).
+// Optional gateway adds a default route at metric 100 (does not rewrite resolv.conf).
+func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {
+	if !validIfaceName(iface) {
+		return "", fmt.Errorf("invalid network interface name")
+	}
+	addrCIDR = strings.TrimSpace(addrCIDR)
+	if addrCIDR == "" {
+		return "", fmt.Errorf("static address is empty")
+	}
+	ip := addrCIDR
+	if i := strings.Index(addrCIDR, "/"); i > 0 {
+		ip = addrCIDR[:i]
+	} else {
+		addrCIDR += "/24"
+	}
+	if !isIPv4Addr(ip) || ip == "0.0.0.0" {
+		return "", fmt.Errorf("invalid IPv4 address %q", ip)
+	}
+
+	upOut, err := NetLinkUp(iface)
+	if err != nil {
+		return upOut, fmt.Errorf("ip link up: %w", err)
+	}
+	parts := []string{upOut}
+
+	already := false
+	for _, a := range NetIfaceAddrs(iface) {
+		if a == ip {
+			already = true
+			break
+		}
+	}
+	if !already {
+		o, addErr := runCmd(5*time.Second, "ip", "addr", "add", addrCIDR, "dev", iface)
+		parts = append(parts, o)
+		if addErr != nil && !strings.Contains(o, "File exists") {
+			return strings.TrimSpace(strings.Join(parts, "\n")), fmt.Errorf("ip addr add: %w", addErr)
+		}
+	}
+
+	gateway = strings.TrimSpace(gateway)
+	if gateway != "" && isIPv4Addr(gateway) {
+		o, rtErr := runCmd(5*time.Second, "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "100")
+		parts = append(parts, o)
+		if rtErr != nil && !strings.Contains(o, "File exists") && !strings.Contains(rtErr.Error(), "File exists") {
+			// Route is best-effort; address assignment still counts as success.
+			parts = append(parts, "default route: "+rtErr.Error())
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n")), nil
+}
+
+// DisconnectRNDIS releases DHCP if possible, flushes addresses, and sets link down.
 func DisconnectRNDIS(iface string) (string, error) {
 	if iface == "" {
 		return "", fmt.Errorf("network interface name is empty")
@@ -66,9 +122,48 @@ func DisconnectRNDIS(iface string) (string, error) {
 		o, _ := runCmd(8*time.Second, "dhclient", "-r", iface)
 		parts = append(parts, o)
 	}
+	if _, err := exec.LookPath("ip"); err == nil {
+		o, _ := runCmd(5*time.Second, "ip", "addr", "flush", "dev", iface)
+		parts = append(parts, o)
+	}
 	o, err := NetLinkDown(iface)
 	parts = append(parts, o)
 	return strings.TrimSpace(strings.Join(parts, "\n")), err
+}
+
+// NetIfaceCounters reads rx/tx byte counters from sysfs. Zero if unknown.
+func NetIfaceCounters(iface string) (rx, tx uint64) {
+	if !validIfaceName(iface) {
+		return 0, 0
+	}
+	rx = readSysUint("/sys/class/net/" + iface + "/statistics/rx_bytes")
+	tx = readSysUint("/sys/class/net/" + iface + "/statistics/tx_bytes")
+	return rx, tx
+}
+
+func readSysUint(path string) uint64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func validIfaceName(s string) bool {
+	if s == "" || len(s) > 15 {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // NetIfaceAddrs returns IPv4 addresses currently configured on iface (via `ip`).

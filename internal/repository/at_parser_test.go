@@ -133,6 +133,146 @@ func TestMergeExtendedSignalProprietaryFallback(t *testing.T) {
 	}
 }
 
+func TestParseGTSENRDTEMP(t *testing.T) {
+	c, ok := ParseGTSENRDTEMP("+GTSENRDTEMP: 1,56736\r\nOK")
+	if !ok || c < 56.7 || c > 56.8 {
+		t.Fatalf("got %v ok=%v", c, ok)
+	}
+	c, ok = ParseGTSENRDTEMP("+GTSENRDTEMP: 42.5")
+	if !ok || c != 42.5 {
+		t.Fatalf("celsius passthrough %v %v", c, ok)
+	}
+}
+
+func TestParseCGPADDRAndGTDNS(t *testing.T) {
+	if ip := ParseCGPADDR(`+CGPADDR: 1,"10.64.1.2"`); ip != "10.64.1.2" {
+		t.Fatalf("ip=%q", ip)
+	}
+	if ip := ParseCGPADDR(`+CGPADDR: 1,"0.0.0.0"`); ip != "" {
+		t.Fatalf("zero ip=%q", ip)
+	}
+	d1, d2 := ParseGTDNS(`+GTDNS: 1,"8.8.8.8","1.1.1.1"`)
+	if d1 != "8.8.8.8" || d2 != "1.1.1.1" {
+		t.Fatalf("%q %q", d1, d2)
+	}
+	if gw := GuessIPv4Gateway("10.64.1.2"); gw != "10.64.1.1" {
+		t.Fatalf("gw=%q", gw)
+	}
+}
+
+func TestParseInfoLine(t *testing.T) {
+	if got := ParseInfoLine("AT+CGMI\r\nFibocom\r\nOK"); got != "Fibocom" {
+		t.Fatalf("got %q", got)
+	}
+	if got := ParseInfoLine("+CGSN: 123456789012345\r\nOK"); got != "123456789012345" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestParseGTCCINFOCells(t *testing.T) {
+	resp := `+GTCCINFO:
+1,4,262,1,05D5,0019BF801,1300,358,103,100,13,60,60,22
+0,9,262,1,05D5,0019BF802,640000,100,78,100,20,70,18
+OK`
+	cells := ParseGTCCINFOCells(resp)
+	if len(cells) != 2 {
+		t.Fatalf("len=%d", len(cells))
+	}
+	if !cells[0].Serving || cells[0].RAT != domain.TechLTE || cells[0].RSRP != -80 {
+		t.Fatalf("lte serving: %+v", cells[0])
+	}
+	if cells[0].SINR != 6 { // 13/2
+		t.Fatalf("sinr=%d", cells[0].SINR)
+	}
+	if cells[1].Serving || cells[1].RAT != domain.Tech5GNR || cells[1].RSRP != -70 {
+		t.Fatalf("nr: %+v", cells[1])
+	}
+	sig := ApplyServingCell(domain.SignalInfo{}, cells)
+	if sig.RSRP != -80 || sig.SINR != 6 {
+		t.Fatalf("apply %+v", sig)
+	}
+}
+
+func TestParseGTCAINFOComponents(t *testing.T) {
+	resp := `+GTCAINFO:
+PCC:5078,940,641760,450,2,1,1,3,19,-1,-80
+SCC 3:2,0,103,216,1444,50,255,4,255,3,255,13,-9,-81
+OK`
+	ca := ParseGTCAINFOComponents(resp)
+	if len(ca) != 2 {
+		t.Fatalf("len=%d %+v", len(ca), ca)
+	}
+	if ca[0].Component != "PCC" || ca[0].RSRP != -80 || ca[0].ARFCN != "641760" || ca[0].Band != "n78" || ca[0].ULARFCN != "940" || !ca[0].ULActive {
+		t.Fatalf("pcc %+v", ca[0])
+	}
+	if ca[1].Component != "SCC3" || ca[1].RSRP != -81 || ca[1].RSRQ != -9 || ca[1].Band != "B3" || ca[1].DLBW != "10 MHz" || ca[1].PCI != "216" || ca[1].ARFCN != "1444" {
+		t.Fatalf("scc %+v", ca[1])
+	}
+}
+
+func TestFormatBandAndBandwidth(t *testing.T) {
+	if b := FormatBand("103", false); b != "B3" {
+		t.Fatalf("expected B3, got %s", b)
+	}
+	if b := FormatBand("78", true); b != "n78" {
+		t.Fatalf("expected n78, got %s", b)
+	}
+	if b := FormatBand("B20", false); b != "B20" {
+		t.Fatalf("expected B20, got %s", b)
+	}
+	if b := DeriveBandFromARFCN(641760); b != "n78" {
+		t.Fatalf("expected n78, got %s", b)
+	}
+	if b := DeriveBandFromARFCN(1444); b != "B3" {
+		t.Fatalf("expected B3, got %s", b)
+	}
+
+	if bw := FormatBandwidth("100", false); bw != "20 MHz" {
+		t.Fatalf("expected 20 MHz, got %s", bw)
+	}
+	if bw := FormatBandwidth("100", true); bw != "100 MHz" {
+		t.Fatalf("expected 100 MHz, got %s", bw)
+	}
+	if bw := FormatBandwidth("50", false); bw != "10 MHz" {
+		t.Fatalf("expected 10 MHz, got %s", bw)
+	}
+	if bw := FormatBandwidth("6", false); bw != "1.4 MHz" {
+		t.Fatalf("expected 1.4 MHz, got %s", bw)
+	}
+	if bw := FormatBandwidth("20000", false); bw != "20 MHz" {
+		t.Fatalf("expected 20 MHz, got %s", bw)
+	}
+
+	if m := FormatModulation("4"); m != "256QAM" {
+		t.Fatalf("expected 256QAM, got %s", m)
+	}
+	if m := FormatModulation("1"); m != "QPSK" {
+		t.Fatalf("expected QPSK, got %s", m)
+	}
+}
+
+func TestCorrelateCAWithCells(t *testing.T) {
+	ca := []domain.CAComponent{
+		{Component: "PCC", PCI: "358"},
+		{Component: "SCC1", PCI: "100", ARFCN: "640000"},
+	}
+	cells := []domain.CellInfo{
+		{Serving: true, RAT: domain.TechLTE, PCI: "358", Band: "103", Bandwidth: "100", RSRP: -80, SINR: 10},
+		{Serving: false, RAT: domain.Tech5GNR, PCI: "100", ARFCN: "640000", Band: "78", Bandwidth: "100"},
+	}
+
+	enriched := CorrelateCAWithCells(ca, cells)
+	if len(enriched) != 2 {
+		t.Fatalf("len=%d", len(enriched))
+	}
+	if enriched[0].Band != "B3" || enriched[0].DLBW != "20 MHz" || enriched[0].RSRP != -80 || enriched[0].SINR != 10 {
+		t.Fatalf("enriched PCC: %+v", enriched[0])
+	}
+	if enriched[1].Band != "n78" || enriched[1].DLBW != "100 MHz" {
+		t.Fatalf("enriched SCC1: %+v", enriched[1])
+	}
+}
+
 func TestParseGTUSBMODE(t *testing.T) {
 	if n := ParseGTUSBMODE("+GTUSBMODE: 41\r\nOK"); n != 41 {
 		t.Fatalf("got %d", n)

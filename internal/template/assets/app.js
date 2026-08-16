@@ -403,10 +403,12 @@ async function dataConnect() {
     await withBusy(btn, async () => {
         try {
             await applyModemSelection();
+            const methodSel = document.getElementById('wan-method-select');
+            const method = (methodSel && methodSel.value) || 'auto';
             const resp = await fetch(apiURL('/api/data/connect'), {
                 method: 'POST',
                 headers: apiHeaders(true),
-                body: JSON.stringify({mode: sel.mode, iface: sel.iface, apn: apn})
+                body: JSON.stringify({mode: sel.mode, iface: sel.iface, apn: apn, method: method})
             });
             const res = await resp.json();
             const ok = resp.ok && !res.error;
@@ -445,6 +447,101 @@ async function dataDisconnect() {
         toast('Disconnect error: ' + e, 'err');
         logConsole(`Data disconnect error: ${e}`);
     }
+}
+
+function fmtBytes(n) {
+    n = Number(n) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) {
+        n /= 1024;
+        i++;
+    }
+    return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function fmtRate(bps) {
+    if (bps == null || bps === '' || Number(bps) < 0) return '-';
+    return fmtBytes(Number(bps)) + '/s';
+}
+
+function fillTableBody(bodyId, rows, emptyCols, emptyText) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    body.innerHTML = '';
+    if (!rows || !rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = emptyCols;
+        td.className = 'muted';
+        td.textContent = emptyText;
+        tr.appendChild(td);
+        body.appendChild(tr);
+        return;
+    }
+    rows.forEach(cols => {
+        const tr = document.createElement('tr');
+        cols.forEach(v => {
+            const td = document.createElement('td');
+            td.textContent = v == null || v === '' ? '—' : String(v);
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
+}
+
+function fillCellsTable(cells) {
+    fillTableBody('cells-body', (cells || []).map(c => [
+        c.serving ? 'Yes' : 'No',
+        c.rat || '—',
+        c.cell_id || '—',
+        c.pci || '—',
+        c.band || '—',
+        c.arfcn || '—',
+        c.rsrp ? c.rsrp + ' dBm' : '—',
+        c.rsrq ? c.rsrq + ' dB' : '—',
+        c.sinr ? c.sinr + ' dB' : '—'
+    ]), 9, 'No cell data yet');
+}
+
+function fillCATable(ca) {
+    fillTableBody('ca-body', (ca || []).map(c => [
+        c.component || '—',
+        c.band || '—',
+        c.pci || '—',
+        c.arfcn || '—',
+        c.ul_arfcn || '—',
+        c.dl_bandwidth || '—',
+        c.ul_bandwidth || '—',
+        c.dl_modulation || '—',
+        c.ul_modulation || '—',
+        c.ul_active ? 'Active' : (c.component === 'PCC' ? 'Active' : '—'),
+        c.rsrp ? c.rsrp + ' dBm' : '—',
+        c.rsrq ? c.rsrq + ' dB' : '—',
+        c.sinr ? c.sinr + ' dB' : '—'
+    ]), 13, 'No CA data yet');
+}
+
+function fillWANDetails(data) {
+    const pdp = data.pdp || {};
+    setText('pdp-ip', pdp.ip || '-');
+    const dns = [pdp.dns1, pdp.dns2].filter(Boolean).join(', ');
+    setText('pdp-dns', dns || '-');
+    setText('pdp-gateway', pdp.gateway || '-');
+    const wan = data.wan || {};
+    setText('wan-method', wan.method || '-');
+    if (wan.session && wan.session !== 'disconnected') {
+        setText('data-status', wan.session + (wan.method ? ' (' + wan.method + ')' : ''));
+    }
+    if (wan.addrs && wan.addrs.length) {
+        setText('wan-ip', wan.addrs[0]);
+    } else if (pdp.ip) {
+        setText('wan-ip', pdp.ip);
+    }
+    setText('wan-rx', wan.rx_bytes ? fmtBytes(wan.rx_bytes) : '-');
+    setText('wan-tx', wan.tx_bytes ? fmtBytes(wan.tx_bytes) : '-');
+    setText('wan-rx-rate', wan.rx_rate_bps ? fmtRate(wan.rx_rate_bps) : '-');
+    setText('wan-tx-rate', wan.tx_rate_bps ? fmtRate(wan.tx_rate_bps) : '-');
 }
 
 function updateHeaderStatus(data) {
@@ -492,6 +589,14 @@ function updateOverview() {
     const op = (data.network && data.network.operator) || '-';
     const tech = (data.network && data.network.tech) || '-';
     setText('ov-net', op + ' · ' + tech);
+    const rsrp = data.signal && data.signal.rsrp ? data.signal.rsrp + ' dBm' : '—';
+    const sinr = data.signal && data.signal.sinr ? data.signal.sinr + ' dB' : '—';
+    setText('ov-sig-detail', 'RSRP ' + rsrp + ' · SINR ' + sinr);
+    if (data.temperature_c) {
+        setText('ov-temp', data.temperature_c.toFixed(1) + ' °C');
+    } else {
+        setText('ov-temp', '-');
+    }
 
     let updated = '-';
     if (data.updated_at) {
@@ -508,13 +613,20 @@ function updateOverview() {
         (modemInventory && modemInventory.selected_net) || '-';
     const ips = wanAddrs && wanAddrs.length ? wanAddrs.join(', ') : '-';
     setText('ov-wan-detail', iface + ' · ' + ips);
-    setText('wan-ip', (data.apn && data.apn.ip_addr) || ips);
+    const pdpIP = data.pdp && data.pdp.ip;
+    setText('wan-ip', (data.apn && data.apn.ip_addr) || pdpIP || ips);
 
     const ssid = lastHotspot && lastHotspot.config && lastHotspot.config.ssid;
     const ncli = (lastHotspot && lastHotspot.clients && lastHotspot.clients.length) || 0;
     setText('ov-ap-detail', (ssid || '—') + ' · ' + apState + ' · ' + ncli + ' client(s)');
 
-    setText('data-status', dataSessionNote);
+    if (dataSessionNote && dataSessionNote !== '—') {
+        setText('data-status', dataSessionNote);
+    } else if (data.wan && data.wan.session) {
+        setText('data-status', data.wan.session + (data.wan.method ? ' (' + data.wan.method + ')' : ''));
+    } else {
+        setText('data-status', '—');
+    }
     updateHeaderStatus(data);
 }
 
@@ -535,7 +647,25 @@ function updateUI(data) {
         setText('sig-rssi', data.signal.rssi ? `${data.signal.rssi} dBm` : '-');
         setText('sig-rsrp', data.signal.rsrp ? `${data.signal.rsrp} dBm` : '-');
         setText('sig-rsrq', data.signal.rsrq ? `${data.signal.rsrq} dB` : '-');
+        setText('sig-sinr', data.signal.sinr ? `${data.signal.sinr} dB` : '-');
     }
+
+    if (data.temperature_c) {
+        setText('modem-temp', Number(data.temperature_c).toFixed(1) + ' °C');
+    } else {
+        setText('modem-temp', '-');
+    }
+
+    if (data.identity) {
+        setText('ident-manufacturer', data.identity.manufacturer || '-');
+        setText('ident-model', data.identity.model || '-');
+        setText('ident-firmware', data.identity.firmware || '-');
+        setText('ident-imei', data.identity.imei || '-');
+    }
+
+    fillCellsTable(data.cells || []);
+    fillCATable(data.ca || []);
+    fillWANDetails(data);
 
     if (data.network) {
         setText('net-operator', data.network.operator || '-');

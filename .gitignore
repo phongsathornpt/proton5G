@@ -1,0 +1,21 @@
+# Build artifacts
+/fm350-manager
+/tmp/
+
+# Local non-root runtime/state (Makefile run/dev)
+/.runtime/
+/.state/
+/.udev/
+
+# Air live reload
+/build-errors.log
+
+# Go
+*.test
+*.out
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

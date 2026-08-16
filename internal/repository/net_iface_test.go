@@ -37,8 +37,30 @@ func TestNetLinkEmptyIface(t *testing.T) {
 	if _, err := ConnectRNDIS(""); err == nil {
 		t.Fatal("ConnectRNDIS empty should error")
 	}
+	if _, err := ConnectRNDISStatic("", "10.0.0.2/24", ""); err == nil {
+		t.Fatal("ConnectRNDISStatic empty iface should error")
+	}
+	if _, err := ConnectRNDISStatic("enx1", "not-an-ip", ""); err == nil {
+		t.Fatal("ConnectRNDISStatic bad addr should error")
+	}
 	if _, err := DisconnectRNDIS(""); err == nil {
 		t.Fatal("DisconnectRNDIS empty should error")
+	}
+}
+
+func TestValidIfaceName(t *testing.T) {
+	if !validIfaceName("enx000011121314") {
+		t.Fatal("expected valid enx")
+	}
+	if validIfaceName("../etc") || validIfaceName("a/b") || validIfaceName("") {
+		t.Fatal("expected invalid names")
+	}
+}
+
+func TestNetIfaceCountersMissing(t *testing.T) {
+	rx, tx := NetIfaceCounters("no-such-iface-zz")
+	if rx != 0 || tx != 0 {
+		t.Fatalf("missing iface counters %d %d", rx, tx)
 	}
 }
 

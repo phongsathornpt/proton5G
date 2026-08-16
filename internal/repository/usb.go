@@ -70,7 +70,7 @@ func (w *Watchdog) findDevicePath(globPattern string) (string, bool) {
 		v, errV := os.ReadFile(filepath.Join(m, "idVendor"))
 		p, errP := os.ReadFile(filepath.Join(m, "idProduct"))
 		if errV == nil && errP == nil {
-			if strings.TrimSpace(string(v)) == w.vendorID && strings.TrimSpace(string(p)) == w.productID {
+			if domain.MatchFM350Filter(w.vendorID, w.productID, strings.TrimSpace(string(v)), strings.TrimSpace(string(p))) {
 				return m, true
 			}
 		}

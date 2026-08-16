@@ -17,6 +17,13 @@ const (
 	DataModeATOnly = "at_only"
 )
 
+// RNDIS address methods for POST /api/data/connect.
+const (
+	DataMethodAuto   = "auto" // DHCP, then PDP static from CGPADDR
+	DataMethodDHCP   = "dhcp"
+	DataMethodStatic = "static"
+)
+
 // ModemInterface is one device node belonging to a modem (serial AT, MBIM, or net).
 type ModemInterface struct {
 	Path    string `json:"path"`
@@ -63,7 +70,8 @@ type ModemSelectRequest struct {
 
 // DataConnectRequest brings up a data path (RNDIS iface or MBIM device).
 type DataConnectRequest struct {
-	Mode  string `json:"mode"`  // "rndis" | "mbim"
-	Iface string `json:"iface"` // net name or /dev/cdc-wdm*
-	APN   string `json:"apn,omitempty"`
+	Mode   string `json:"mode"`  // "rndis" | "mbim"
+	Iface  string `json:"iface"` // net name or /dev/cdc-wdm*
+	APN    string `json:"apn,omitempty"`
+	Method string `json:"method,omitempty"` // auto | dhcp | static (RNDIS only)
 }

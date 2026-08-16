@@ -26,18 +26,34 @@
                 <div class="info-item"><span>Mode:</span> <strong id="data-mode">-</strong></div>
                 <div class="info-item"><span>mbimcli:</span> <strong id="mbim-cli">-</strong></div>
                 <div class="info-item"><span>Session:</span> <strong id="data-status">-</strong></div>
+                <div class="info-item"><span>Method:</span> <strong id="wan-method">-</strong></div>
                 <div class="info-item"><span>WAN IP:</span> <strong id="wan-ip">-</strong></div>
+                <div class="info-item"><span>PDP IP:</span> <strong id="pdp-ip">-</strong></div>
+                <div class="info-item"><span>PDP DNS:</span> <strong id="pdp-dns">-</strong></div>
+                <div class="info-item"><span>PDP gateway:</span> <strong id="pdp-gateway">-</strong></div>
+                <div class="info-item"><span>Download:</span> <strong id="wan-rx">-</strong></div>
+                <div class="info-item"><span>Upload:</span> <strong id="wan-tx">-</strong></div>
+                <div class="info-item"><span>Down rate:</span> <strong id="wan-rx-rate">-</strong></div>
+                <div class="info-item"><span>Up rate:</span> <strong id="wan-tx-rate">-</strong></div>
             </div>
             <div class="form-group mt-15">
                 <label for="data-iface-select">Data interface</label>
                 <select id="data-iface-select"></select>
+            </div>
+            <div class="form-group mt-15">
+                <label for="wan-method-select">RNDIS address</label>
+                <select id="wan-method-select">
+                    <option value="auto">Auto (DHCP, then PDP static)</option>
+                    <option value="dhcp">DHCP only</option>
+                    <option value="static">PDP static only (CGPADDR)</option>
+                </select>
             </div>
             <div class="button-group mt-15">
                 <button type="button" class="btn-primary" id="data-connect-btn" onclick="dataConnect()">Connect</button>
                 <button type="button" onclick="dataDisconnect()">Disconnect</button>
                 <button type="button" onclick="refreshModems()">Refresh</button>
             </div>
-            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM. Connect here first, then start the WiFi hotspot under LAN.</p>
+            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM. Auto tries DHCP first, then paints the PDP IPv4 from AT+CGPADDR onto the iface. Does not rewrite /etc/resolv.conf.</p>
         </section>
     </div>
 </section>
