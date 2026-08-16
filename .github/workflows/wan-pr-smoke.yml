@@ -1,9 +1,0 @@
-name: WAN PR runner smoke
-on:
-  pull_request:
-    branches: [develop]
-jobs:
-  smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo pr-runner-ok
