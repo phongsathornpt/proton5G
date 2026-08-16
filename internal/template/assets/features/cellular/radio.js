@@ -30,6 +30,7 @@ function summarizeUplinkCA(ca) {
         rat,
         ccCount: carriers.length,
         carriers,
+        allActive: active,
         lteCount: groups.LTE.length,
         nrCount: groups.NR.length,
         unknownCount: groups.Unknown.length
@@ -56,11 +57,15 @@ function fillUplinkCASummary(ca) {
     if (ul.nrCount) counts.push(`NR ${ul.nrCount}CC`);
     if (ul.unknownCount) counts.push(`Unknown ${ul.unknownCount}CC`);
 
+    // When CA is active, show the winning same-RAT CA group. Otherwise show every
+    // uplink-active carrier so EN-DC remains visible without being called 2CA.
+    const displayCarriers = ul.active ? ul.carriers : ul.allActive;
+
     setText('ul-ca-status', status);
     setText('ul-ca-carriers', counts.length ? counts.join(' · ') : '—');
-    setText('ul-ca-bands', joinCarrierField(ul.carriers, 'band'));
-    setText('ul-ca-mimo', joinCarrierField(ul.carriers, 'ul_mimo'));
-    setText('ul-ca-modulation', joinCarrierField(ul.carriers, 'ul_modulation'));
+    setText('ul-ca-bands', joinCarrierField(displayCarriers, 'band'));
+    setText('ul-ca-mimo', joinCarrierField(displayCarriers, 'ul_mimo'));
+    setText('ul-ca-modulation', joinCarrierField(displayCarriers, 'ul_modulation'));
 }
 
 function fillCATable(ca) {
