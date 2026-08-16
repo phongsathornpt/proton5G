@@ -51,6 +51,27 @@ when `AT+GTCAINFO?` reports those values.
 
 A parser correction is included for the FM350 long SCC format. The previous parser could read a DL-MIMO value of `4` as modulation code `4`, falsely displaying `256QAM`. The new enrichment step reads MIMO and modulation from their separate fields.
 
+## Uplink 2CA
+
+The manager detects uplink carrier aggregation from the per-component `ul_active` state parsed from `AT+GTCAINFO?`.
+
+- PCC is treated as the primary uplink carrier.
+- An SCC contributes to uplink CA only when the modem reports it as uplink-configured / uplink-active.
+- `LTE B40 + LTE B3` with both carriers uplink-active is reported as `Active (LTE 2CC)`.
+- `LTE B40 + NR n41` under EN-DC is not labeled same-RAT 2CA. The UI reports both active RATs separately so dual connectivity is not confused with LTE or NR carrier aggregation.
+
+The Cellular panel shows:
+
+- Uplink CA state
+- active LTE/NR carrier counts
+- UL bands
+- UL MIMO per active carrier
+- UL modulation per active carrier
+
+This is telemetry, not a force switch. The network and modem firmware decide whether a secondary carrier is actually scheduled for uplink transmission. A strict band lock can reduce UL CA opportunities if it removes the secondary LTE carrier needed by the serving site.
+
+For upload tuning, prefer the broader `th-lte` or `th-nsa` profile first, confirm the live UL carrier combination, then compare stricter profiles at the same location and RF conditions.
+
 ## 256QAM
 
 256QAM should not be blindly forced. Modulation is selected dynamically from RF quality, carrier configuration and network scheduling. The manager reports the active modulation from `AT+GTCAINFO?`:
