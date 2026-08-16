@@ -43,9 +43,10 @@ func validateFM350NetIfaceAt(classNetRoot, iface string) error {
 	return fmt.Errorf("network interface %q is not owned by a recognized FM350 USB device", iface)
 }
 
-// ValidateFM350RNDISIface additionally prevents the RNDIS helper from operating
-// on an MBIM host interface. A normal MBIM endpoint has both cdc-wdm control and
-// a cdc_mbim-backed net interface; that net interface is not a RNDIS endpoint.
+// ValidateFM350RNDISIface protects RNDIS-specific host operations. The target
+// must belong to an FM350 and be bound to Linux's rndis_host driver. A cdc_mbim
+// or other USB-network interface is a different data protocol and must not be
+// configured with the FM350 RNDIS address convention.
 func ValidateFM350RNDISIface(iface string) error {
 	return validateFM350RNDISIfaceAt(sysClassNetRoot, iface)
 }
@@ -55,10 +56,16 @@ func validateFM350RNDISIfaceAt(classNetRoot, iface string) error {
 		return err
 	}
 	driver := strings.ToLower(netIfaceDeviceDriverAt(classNetRoot, iface))
-	if driver == "cdc_mbim" {
+	switch driver {
+	case "rndis_host":
+		return nil
+	case "":
+		return fmt.Errorf("cannot determine kernel driver for FM350 network interface %q", iface)
+	case "cdc_mbim":
 		return fmt.Errorf("network interface %q is backed by cdc_mbim; use its MBIM control endpoint instead of RNDIS", iface)
+	default:
+		return fmt.Errorf("network interface %q is backed by %s, not rndis_host", iface, driver)
 	}
-	return nil
 }
 
 // netIfaceDeviceDriver reports the bound kernel driver for a host net interface.
