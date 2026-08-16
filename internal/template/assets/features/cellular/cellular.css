@@ -1,1 +1,117 @@
 /* feature: cellular */
+
+#panel-cellular .ul-ca-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 2px 0 16px;
+    padding: 12px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+}
+
+#panel-cellular .ul-ca-summary .ul-ca-metric {
+    min-width: 0;
+    min-height: 74px;
+    padding: 11px 12px;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.72);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+}
+
+#panel-cellular .ul-ca-summary .ul-ca-metric span {
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+#panel-cellular .ul-ca-summary .ul-ca-metric strong {
+    color: #e2e8f0;
+    font-size: 0.94rem;
+    line-height: 1.25;
+    text-align: left;
+    word-break: break-word;
+}
+
+#panel-cellular .ul-ca-summary .ul-ca-metric-status {
+    grid-column: 1 / -1;
+    min-height: 62px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: rgba(15, 23, 42, 0.9);
+}
+
+#panel-cellular .ul-ca-state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 128px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid #475569;
+    background: rgba(100, 116, 139, 0.12);
+    color: #cbd5e1;
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+#panel-cellular .ul-ca-state.ok {
+    border-color: #166534;
+    background: rgba(34, 197, 94, 0.14);
+    color: #86efac;
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.04), 0 0 16px rgba(34, 197, 94, 0.08);
+}
+
+#panel-cellular .ul-ca-state.warn {
+    border-color: #854d0e;
+    background: rgba(234, 179, 8, 0.12);
+    color: #fde047;
+}
+
+#panel-cellular .ul-ca-state.idle {
+    border-color: #334155;
+    background: rgba(100, 116, 139, 0.08);
+    color: #94a3b8;
+}
+
+#panel-cellular #ca-table {
+    margin-top: 4px;
+}
+
+#panel-cellular #ca-table th:nth-child(12),
+#panel-cellular #ca-table td:nth-child(12) {
+    white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+    #panel-cellular .ul-ca-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 560px) {
+    #panel-cellular .ul-ca-summary {
+        grid-template-columns: 1fr;
+    }
+
+    #panel-cellular .ul-ca-summary .ul-ca-metric-status {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    #panel-cellular .ul-ca-state {
+        min-width: 0;
+    }
+}
