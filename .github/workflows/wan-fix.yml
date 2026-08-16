@@ -1,0 +1,1150 @@
+name: WAN fix validation
+
+on:
+  push:
+    branches:
+      - fix/wan-data-path
+    paths:
+      - .github/workflows/wan-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Apply WAN fixes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text()
+
+          def write(path, text):
+              Path(path).write_text(text)
+
+          def replace_once(path, old, new):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, got {count}: {old[:80]!r}")
+              write(path, text.replace(old, new, 1))
+
+          def replace_block(path, start, end, new):
+              text = read(path)
+              a = text.find(start)
+              if a < 0:
+                  raise SystemExit(f"{path}: start marker missing: {start!r}")
+              b = text.find(end, a)
+              if b < 0:
+                  raise SystemExit(f"{path}: end marker missing: {end!r}")
+              write(path, text[:a] + new.rstrip() + "\n\n" + text[b:])
+
+          # Domain contracts: expose WAN protocol/control endpoint and a correctly named
+          # bytes-per-second rate while retaining the old JSON aliases for compatibility.
+          replace_once(
+              "internal/pkg/domain/inventory.go",
+              'DataMethodAuto   DataMethod = "auto" // DHCP, then PDP static from CGPADDR\n\tDataMethodDHCP   DataMethod = "dhcp"\n\tDataMethodStatic DataMethod = "static"',
+              'DataMethodAuto   DataMethod = "auto" // DHCP only; never guess subnet/gateway from PDP address\n\tDataMethodDHCP   DataMethod = "dhcp"\n\tDataMethodStatic DataMethod = "static" // reserved for explicit network parameters; currently rejected',
+          )
+
+          replace_once(
+              "internal/pkg/domain/modem.go",
+              'Gateway string `json:"gateway,omitempty"` // guessed .1; not from AT',
+              'Gateway string `json:"gateway,omitempty"` // populated only when a protocol reports a real gateway',
+          )
+          replace_block(
+              "internal/pkg/domain/modem.go",
+              "type WANInfo struct {",
+              "// ATPoll is one AT repository status sample",
+              '''type WANInfo struct {
+\tMode          DataMode    `json:"mode,omitempty"`
+\tControlDevice string      `json:"control_device,omitempty"` // e.g. /dev/cdc-wdm0 for MBIM
+\tIface         string      `json:"iface,omitempty"`          // host network interface
+\tMethod        WANMethod   `json:"method,omitempty"`
+\tSession       WANSession  `json:"session,omitempty"`
+\tAddrs         []string    `json:"addrs,omitempty"`
+\tRxBytes       uint64      `json:"rx_bytes,omitempty"`
+\tTxBytes       uint64      `json:"tx_bytes,omitempty"`
+\tRxBytesPerSec int64       `json:"rx_bytes_per_sec,omitempty"`
+\tTxBytesPerSec int64       `json:"tx_bytes_per_sec,omitempty"`
+\tRxRateBps     int64       `json:"rx_rate_bps,omitempty"` // deprecated compatibility alias; bytes/sec
+\tTxRateBps     int64       `json:"tx_rate_bps,omitempty"` // deprecated compatibility alias; bytes/sec
+}''',
+          )
+
+          # PDP telemetry must not fabricate a gateway, and successful empty medium-tier
+          # replies must clear stale address/DNS state.
+          replace_once(
+              "internal/repository/at_client.go",
+              '''\tsess.IP = ParseCGPADDR(addrResp)
+\tif sess.IP != "" {
+\t\tsess.Gateway = GuessIPv4Gateway(sess.IP)
+\t}
+\tif dnsResp, derr := c.SendRaw(CmdGTDNS(cid)); derr == nil {''',
+              '''\tsess.IP = ParseCGPADDR(addrResp)
+\tif dnsResp, derr := c.SendRaw(CmdGTDNS(cid)); derr == nil {''',
+          )
+          replace_block(
+              "internal/repository/at_client.go",
+              "func (c *Client) ActivatePDP(cid int) error {",
+              "func (c *Client) QueryPDP(cid int)",
+              '''func (c *Client) ActivatePDP(cid int) error {
+\tif cid <= 0 {
+\t\tcid = 1
+\t}
+\tif err := c.EnsureConnected(); err != nil {
+\t\treturn err
+\t}
+\tcmd := CmdCGACTSet(cid, true)
+\tresp, err := c.SendRaw(cmd)
+\tif err != nil {
+\t\treturn err
+\t}
+\tif strings.Contains(resp, ATResultOK) {
+\t\treturn nil
+\t}
+\t// Already-active contexts often return ERROR; accept if an address exists.
+\tsess, qerr := c.QueryPDP(cid)
+\tif qerr == nil && sess.IP != "" {
+\t\treturn nil
+\t}
+\treturn fmt.Errorf("%s failed: %s", cmd, resp)
+}
+
+func (c *Client) DeactivatePDP(cid int) error {
+\tif cid <= 0 {
+\t\tcid = 1
+\t}
+\tif err := c.EnsureConnected(); err != nil {
+\t\treturn err
+\t}
+\tcmd := CmdCGACTSet(cid, false)
+\tresp, err := c.SendRaw(cmd)
+\tif err != nil {
+\t\treturn err
+\t}
+\tif !strings.Contains(resp, ATResultOK) {
+\t\treturn fmt.Errorf("%s failed: %s", cmd, resp)
+\t}
+\treturn nil
+}''',
+          )
+
+          replace_once(
+              "internal/repository/at_tiered.go",
+              '''\tif resp, err := c.send(CmdCGPADDR(cid)); err == nil {
+\t\tif ip := ParseCGPADDR(resp); ip != "" {
+\t\t\tpdp.IP = ip
+\t\t\tpdp.Gateway = GuessIPv4Gateway(ip)
+\t\t}
+\t}
+\tif resp, err := c.send(CmdGTDNS(cid)); err == nil {
+\t\tdns1, dns2 := ParseGTDNS(resp)
+\t\tif dns1 != "" || dns2 != "" {
+\t\t\tpdp.DNS1, pdp.DNS2 = dns1, dns2
+\t\t}
+\t}''',
+              '''\tif resp, err := c.send(CmdCGPADDR(cid)); err == nil {
+\t\tpdp.IP = ParseCGPADDR(resp)
+\t\tpdp.Gateway = ""
+\t}
+\tif resp, err := c.send(CmdGTDNS(cid)); err == nil {
+\t\tpdp.DNS1, pdp.DNS2 = ParseGTDNS(resp)
+\t}''',
+          )
+
+          write(
+              "internal/repository/at_tiered_control.go",
+              '''package repository
+
+import "fm350-monitor/internal/pkg/domain"
+
+// ActivatePDP invalidates medium-tier PDP state so the next background sample
+// observes the newly activated bearer immediately instead of waiting up to 10s.
+func (c *TieredClient) ActivatePDP(cid int) error {
+\tif err := c.Client.ActivatePDP(cid); err != nil {
+\t\treturn err
+\t}
+\tc.cacheMu.Lock()
+\tc.cache.mediumAt = c.cache.mediumAt.Add(-atMediumPollInterval)
+\tc.cacheMu.Unlock()
+\treturn nil
+}
+
+func (c *TieredClient) DeactivatePDP(cid int) error {
+\tif err := c.Client.DeactivatePDP(cid); err != nil {
+\t\treturn err
+\t}
+\tif cid <= 0 {
+\t\tcid = 1
+\t}
+\tc.cacheMu.Lock()
+\tc.cache.pdp = domain.PDPSession{CID: cid}
+\tc.cache.mediumAt = c.cache.mediumAt.Add(-atMediumPollInterval)
+\tc.cacheMu.Unlock()
+\treturn nil
+}
+
+// QueryPDP keeps explicit control-path queries and the background cache aligned.
+func (c *TieredClient) QueryPDP(cid int) (domain.PDPSession, error) {
+\tsess, err := c.Client.QueryPDP(cid)
+\tif err != nil {
+\t\treturn sess, err
+\t}
+\tc.cacheMu.Lock()
+\tc.cache.pdp = sess
+\tc.cache.mediumAt = c.now()
+\tc.cacheMu.Unlock()
+\treturn sess, nil
+}
+''',
+          )
+
+          replace_once(
+              "internal/usecase/ports.go",
+              "\tActivatePDP(cid int) error\n\tQueryPDP(cid int) (domain.PDPSession, error)",
+              "\tActivatePDP(cid int) error\n\tDeactivatePDP(cid int) error\n\tQueryPDP(cid int) (domain.PDPSession, error)",
+          )
+
+          # USB net interfaces are protocol-neutral. Presence of an MBIM control node means
+          # the matching net interface belongs to the MBIM data path; don't advertise it as RNDIS.
+          replace_once(
+              "internal/repository/inventory.go",
+              "// netIfacesUnder finds network interface names under a USB device (RNDIS/ECM/NCM).",
+              "// netIfacesUnder finds host network interfaces under a USB modem, regardless of data protocol.",
+          )
+          replace_block(
+              "internal/repository/inventory.go",
+              "func detectDataMode(mbimCount, netCount int) domain.DataMode {",
+              "func uniqueSorted(in []string)",
+              '''func detectDataMode(mbimCount, netCount int) domain.DataMode {
+\tswitch {
+\tcase mbimCount > 0:
+\t\t// MBIM normally exposes both a cdc-wdm control node and a host net iface.
+\t\t// The net iface is part of MBIM; its existence does not imply RNDIS/mixed mode.
+\t\treturn domain.DataModeMBIM
+\tcase netCount > 0:
+\t\treturn domain.DataModeRNDIS
+\tdefault:
+\t\treturn domain.DataModeATOnly
+\t}
+}''',
+          )
+          replace_once(
+              "internal/repository/inventory.go",
+              "// buildNetIfacesParallel fills RNDIS/net iface metadata; parallel when several ifaces.",
+              "// buildNetIfacesParallel fills host network iface metadata; parallel when several ifaces.",
+          )
+          text = read("internal/repository/inventory.go")
+          text = text.replace('(RNDIS/net, %s)', '(net, %s)').replace('(RNDIS/net, %s, %s)', '(net, %s, %s)')
+          write("internal/repository/inventory.go", text)
+
+          # Static configuration must include real network parameters; never synthesize /24 or .1.
+          replace_block(
+              "internal/repository/net_iface.go",
+              "func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {",
+              "// DisconnectRNDIS releases DHCP",
+              '''func ConnectRNDISStatic(iface, addrCIDR, gateway string) (string, error) {
+\tif !validIfaceName(iface) {
+\t\treturn "", fmt.Errorf("invalid network interface name")
+\t}
+\taddrCIDR = strings.TrimSpace(addrCIDR)
+\tif addrCIDR == "" || !strings.Contains(addrCIDR, "/") {
+\t\treturn "", fmt.Errorf("static address must include an explicit CIDR prefix")
+\t}
+\tip := addrCIDR[:strings.Index(addrCIDR, "/")]
+\tif !isIPv4Addr(ip) || ip == "0.0.0.0" {
+\t\treturn "", fmt.Errorf("invalid IPv4 address %q", ip)
+\t}
+\tgateway = strings.TrimSpace(gateway)
+\tif gateway != "" && !isIPv4Addr(gateway) {
+\t\treturn "", fmt.Errorf("invalid IPv4 gateway %q", gateway)
+\t}
+
+\tupOut, err := NetLinkUp(iface)
+\tif err != nil {
+\t\treturn upOut, fmt.Errorf("ip link up: %w", err)
+\t}
+\tparts := []string{upOut}
+\to, addErr := runCmd(5*time.Second, "ip", "addr", "replace", addrCIDR, "dev", iface)
+\tparts = append(parts, o)
+\tif addErr != nil {
+\t\treturn strings.TrimSpace(strings.Join(parts, "\\n")), fmt.Errorf("ip addr replace: %w", addErr)
+\t}
+
+\tif gateway != "" {
+\t\to, rtErr := runCmd(5*time.Second, "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "100")
+\t\tparts = append(parts, o)
+\t\tif rtErr != nil && !strings.Contains(o, "File exists") && !strings.Contains(rtErr.Error(), "File exists") {
+\t\t\treturn strings.TrimSpace(strings.Join(parts, "\\n")), fmt.Errorf("default route: %w", rtErr)
+\t\t}
+\t}
+\treturn strings.TrimSpace(strings.Join(parts, "\\n")), nil
+}''',
+          )
+          replace_once(
+              "internal/repository/net_iface.go",
+              '''func DisconnectRNDIS(iface string) (string, error) {
+\tif iface == "" {
+\t\treturn "", fmt.Errorf("network interface name is empty")
+\t}''',
+              '''func DisconnectRNDIS(iface string) (string, error) {
+\tif !validIfaceName(iface) {
+\t\treturn "", fmt.Errorf("invalid network interface name")
+\t}''',
+          )
+
+          # Selection and WAN-state helpers keep destructive host operations scoped to the
+          # currently selected modem-owned endpoint.
+          write(
+              "internal/usecase/wan_selection.go",
+              '''package usecase
+
+import (
+\t"fmt"
+
+\t"fm350-monitor/internal/pkg/domain"
+)
+
+func ownsPath(items []domain.ModemInterface, path string) bool {
+\tfor _, item := range items {
+\t\tif item.Path == path {
+\t\t\treturn true
+\t\t}
+\t}
+\treturn false
+}
+
+func findDataOwner(modems []domain.ModemDevice, path string, mbim bool) (domain.ModemDevice, bool) {
+\tfor _, modem := range modems {
+\t\titems := modem.NetIfaces
+\t\tif mbim {
+\t\t\titems = modem.MBIMNodes
+\t\t}
+\t\tif ownsPath(items, path) {
+\t\t\treturn modem, true
+\t\t}
+\t}
+\treturn domain.ModemDevice{}, false
+}
+
+func resolveDataSelectionOwner(modems []domain.ModemDevice, req domain.ModemSelectRequest, modem domain.ModemDevice, ok bool) (domain.ModemDevice, bool, error) {
+\tcheck := func(path string, mbim bool, label string) error {
+\t\tif path == "" {
+\t\t\treturn nil
+\t\t}
+\t\towner, found := findDataOwner(modems, path, mbim)
+\t\tif !found {
+\t\t\treturn fmt.Errorf("unknown %s %q; select a data endpoint discovered under this modem", label, path)
+\t\t}
+\t\tif ok && modem.ID != owner.ID {
+\t\t\treturn fmt.Errorf("%s %q does not belong to modem %s", label, path, modem.ID)
+\t\t}
+\t\tmodem, ok = owner, true
+\t\treturn nil
+\t}
+\tif err := check(req.MBIMDevice, true, "mbim_device"); err != nil {
+\t\treturn modem, ok, err
+\t}
+\tif err := check(req.NetIface, false, "net_iface"); err != nil {
+\t\treturn modem, ok, err
+\t}
+\treturn modem, ok, nil
+}
+
+func (s *ModemService) validateSelectedDataPath(mode domain.DataMode, path string) error {
+\ts.mu.RLock()
+\tselectedNet, selectedMBIM := s.selectedNet, s.selectedMBIM
+\ts.mu.RUnlock()
+\tswitch mode {
+\tcase domain.DataModeRNDIS:
+\t\tif path == "" || selectedNet == "" || path != selectedNet {
+\t\t\treturn fmt.Errorf("RNDIS/net interface %q is not the selected modem data interface", path)
+\t\t}
+\tcase domain.DataModeMBIM:
+\t\tif path == "" || selectedMBIM == "" || path != selectedMBIM {
+\t\t\treturn fmt.Errorf("MBIM device %q is not the selected modem control device", path)
+\t\t}
+\t}
+\treturn nil
+}
+
+func (s *ModemService) clearWANStatsLocked() {
+\ts.wanRx = 0
+\ts.wanTx = 0
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt.UTC()
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt.Truncate(0)
+\ts.wanStatsAt = s.wanStatsAt.AddDate(-s.wanStatsAt.Year()+1, 0, 0)
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt
+\ts.wanIface = ""
+}
+
+func (s *ModemService) resetWANLocked() {
+\ts.status.WAN = domain.WANInfo{Session: domain.WANSessionDisconnected}
+\ts.wanRx, s.wanTx = 0, 0
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt.Truncate(0)
+\ts.wanStatsAt = s.wanStatsAt.AddDate(-s.wanStatsAt.Year()+1, 0, 0)
+\ts.wanIface = ""
+}
+
+func (s *ModemService) markWANConnected(mode domain.DataMode, controlDevice, iface string, method domain.WANMethod) {
+\ts.mu.Lock()
+\ts.status.WAN = domain.WANInfo{
+\t\tMode:          mode,
+\t\tControlDevice: controlDevice,
+\t\tIface:         iface,
+\t\tMethod:        method,
+\t\tSession:       domain.WANSessionConnected,
+\t}
+\ts.wanRx, s.wanTx = 0, 0
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt.Truncate(0)
+\ts.wanStatsAt = s.wanStatsAt.AddDate(-s.wanStatsAt.Year()+1, 0, 0)
+\ts.wanIface = ""
+\ts.mu.Unlock()
+}
+
+func (s *ModemService) markWANDisconnected(mode domain.DataMode, controlDevice, iface string) {
+\ts.mu.Lock()
+\ts.status.WAN = domain.WANInfo{
+\t\tMode:          mode,
+\t\tControlDevice: controlDevice,
+\t\tIface:         iface,
+\t\tSession:       domain.WANSessionDisconnected,
+\t}
+\ts.wanRx, s.wanTx = 0, 0
+\ts.wanStatsAt = s.wanStatsAt.Add(-s.wanStatsAt.Sub(s.wanStatsAt))
+\ts.wanStatsAt = s.wanStatsAt.Truncate(0)
+\ts.wanStatsAt = s.wanStatsAt.AddDate(-s.wanStatsAt.Year()+1, 0, 0)
+\ts.wanIface = ""
+\ts.mu.Unlock()
+}
+''',
+          )
+
+          # Replace the intentionally ugly zero-time expressions above with time.Time{} and import time.
+          p = "internal/usecase/wan_selection.go"
+          text = read(p)
+          text = text.replace('import (\n\t"fmt"', 'import (\n\t"fmt"\n\t"time"')
+          import re
+          text = re.sub(r's\.wanStatsAt = s\.wanStatsAt\.Add\(-s\.wanStatsAt\.Sub\(s\.wanStatsAt\)\)\n(?:\ts\.wanStatsAt = .*\n)*?\ts\.wanIface = ""', 's.wanStatsAt = time.Time{}\n\ts.wanIface = ""', text)
+          write(p, text)
+
+          # Keep APN IP synchronized with PDP state, including bearer loss.
+          replace_once(
+              "internal/usecase/modem.go",
+              '''\ts.status.PDP = poll.PDP
+\tif s.status.APN.IPAddr == "" {
+\t\ts.status.APN.IPAddr = poll.PDP.IP
+\t}''',
+              '''\ts.status.PDP = poll.PDP
+\ts.status.APN.IPAddr = poll.PDP.IP''',
+          )
+
+          replace_block(
+              "internal/usecase/modem.go",
+              "func (s *ModemService) refreshWANLocked(now time.Time) {",
+              "func (s *ModemService) logPermissionOnceLocked",
+              '''func (s *ModemService) refreshWANLocked(now time.Time) {
+\tprev := s.status.WAN
+\tiface := prev.Iface
+\tif prev.Mode == "" || prev.Mode == domain.DataModeRNDIS || iface == "" {
+\t\tiface = s.selectedNet
+\t}
+\twan := domain.WANInfo{
+\t\tMode:          prev.Mode,
+\t\tControlDevice: prev.ControlDevice,
+\t\tIface:         iface,
+\t\tMethod:        prev.Method,
+\t\tSession:       prev.Session,
+\t}
+\tif s.net == nil || iface == "" {
+\t\tif s.wanIface != iface {
+\t\t\ts.wanRx, s.wanTx = 0, 0
+\t\t\ts.wanStatsAt = time.Time{}
+\t\t\ts.wanIface = iface
+\t\t}
+\t\ts.status.WAN = wan
+\t\treturn
+\t}
+
+\twan.Addrs = s.net.IfaceAddrs(iface)
+\trx, tx := s.net.IfaceCounters(iface)
+\twan.RxBytes, wan.TxBytes = rx, tx
+\tif s.wanIface == iface && !s.wanStatsAt.IsZero() {
+\t\tdt := now.Sub(s.wanStatsAt).Seconds()
+\t\tif dt >= 0.5 && rx >= s.wanRx && tx >= s.wanTx {
+\t\t\twan.RxBytesPerSec = int64(float64(rx-s.wanRx) / dt)
+\t\t\twan.TxBytesPerSec = int64(float64(tx-s.wanTx) / dt)
+\t\t\twan.RxRateBps = wan.RxBytesPerSec
+\t\t\twan.TxRateBps = wan.TxBytesPerSec
+\t\t}
+\t}
+\ts.wanRx, s.wanTx, s.wanStatsAt, s.wanIface = rx, tx, now, iface
+\ts.status.WAN = wan
+}''',
+          )
+
+          replace_block(
+              "internal/usecase/modem.go",
+              "func (s *ModemService) MBIMConnect(device, apn string) (string, error) {",
+              "// ListModems returns discovered modems",
+              '''func (s *ModemService) MBIMConnect(device, apn string) (string, error) {
+\tif s.mbim == nil {
+\t\treturn "", errModemUnavailable
+\t}
+\ts.mu.RLock()
+\tselectedMBIM := s.selectedMBIM
+\thostIface := s.selectedNet
+\tif device == "" {
+\t\tdevice = selectedMBIM
+\t}
+\tif apn == "" {
+\t\tapn = s.status.APN.APN
+\t}
+\ts.mu.RUnlock()
+\tif selectedMBIM != "" && device != selectedMBIM {
+\t\treturn "", fmt.Errorf("MBIM device %q is not the selected modem control device", device)
+\t}
+\tout, err := s.mbim.Connect(device, apn)
+\tif err == nil {
+\t\ts.markWANConnected(domain.DataModeMBIM, device, hostIface, "")
+\t}
+\treturn out, err
+}
+
+func (s *ModemService) MBIMDisconnect(device string) (string, error) {
+\tif s.mbim == nil {
+\t\treturn "", errModemUnavailable
+\t}
+\ts.mu.RLock()
+\tselectedMBIM := s.selectedMBIM
+\thostIface := s.selectedNet
+\tif device == "" {
+\t\tdevice = selectedMBIM
+\t}
+\ts.mu.RUnlock()
+\tif selectedMBIM != "" && device != selectedMBIM {
+\t\treturn "", fmt.Errorf("MBIM device %q is not the selected modem control device", device)
+\t}
+\tout, err := s.mbim.Disconnect(device)
+\tif err == nil {
+\t\ts.markWANDisconnected(domain.DataModeMBIM, device, hostIface)
+\t}
+\treturn out, err
+}''',
+          )
+
+          replace_once(
+              "internal/usecase/modem.go",
+              '''\ts.mu.Lock()
+\tinv := s.buildInventoryLocked()
+\tif req.ModemID == ""''',
+              '''\ts.mu.Lock()
+\tinv := s.buildInventoryLocked()
+\toldNet, oldMBIM := s.selectedNet, s.selectedMBIM
+\tif req.ModemID == ""''',
+          )
+          replace_once(
+              "internal/usecase/modem.go",
+              '''\t}
+
+\tatPort := req.ATPort
+\tif ok {''',
+              '''\t}
+
+\tresolved, resolvedOK, resolveErr := resolveDataSelectionOwner(inv.Modems, req, modem, ok)
+\tif resolveErr != nil {
+\t\ts.mu.Unlock()
+\t\treturn inv, resolveErr
+\t}
+\tmodem, ok = resolved, resolvedOK
+
+\tatPort := req.ATPort
+\tif ok {''',
+          )
+          replace_once(
+              "internal/usecase/modem.go",
+              '''\tif req.NetIface != "" {
+\t\ts.selectedNet = req.NetIface
+\t} else if ok && len(modem.NetIfaces) > 0 {''',
+              '''\tif req.NetIface != "" {
+\t\ts.selectedNet = req.NetIface
+\t} else if ok && len(modem.NetIfaces) > 0 {''',
+          )
+          replace_once(
+              "internal/usecase/modem.go",
+              '''\t}
+
+\tselectedID := s.selectedModemID
+\tneedPortSwitch := atPort != "" && s.at != nil''',
+              '''\t}
+\tif oldNet != s.selectedNet || oldMBIM != s.selectedMBIM {
+\t\ts.resetWANLocked()
+\t}
+
+\tselectedID := s.selectedModemID
+\tneedPortSwitch := atPort != "" && s.at != nil''',
+          )
+
+          replace_block(
+              "internal/usecase/modem.go",
+              "// DataConnect brings up RNDIS (DHCP) or MBIM based on mode.",
+              "// DataDisconnect tears down RNDIS or MBIM session.",
+              '''// DataConnect brings up RNDIS (DHCP) or MBIM based on mode.
+func (s *ModemService) DataConnect(req domain.DataConnectRequest) (string, error) {
+\tmode, err := domain.ParseDataMode(string(req.Mode))
+\tif err != nil {
+\t\treturn "", err
+\t}
+\tiface := strings.TrimSpace(req.Iface)
+
+\ts.mu.RLock()
+\tselectedNet, selectedMBIM := s.selectedNet, s.selectedMBIM
+\tif iface == "" {
+\t\tswitch mode {
+\t\tcase domain.DataModeRNDIS:
+\t\t\tiface = selectedNet
+\t\tcase domain.DataModeMBIM:
+\t\t\tiface = selectedMBIM
+\t\tdefault:
+\t\t\t// A cdc-wdm control node plus net iface is a normal MBIM pairing.
+\t\t\tif selectedMBIM != "" {
+\t\t\t\tmode = domain.DataModeMBIM
+\t\t\t\tiface = selectedMBIM
+\t\t\t} else if selectedNet != "" {
+\t\t\t\tmode = domain.DataModeRNDIS
+\t\t\t\tiface = selectedNet
+\t\t\t}
+\t\t}
+\t}
+\tapn := req.APN
+\tif apn == "" {
+\t\tapn = s.status.APN.APN
+\t}
+\tcid := s.status.APN.CID
+\ts.mu.RUnlock()
+
+\tif mode == domain.DataModeAuto {
+\t\tif strings.HasPrefix(iface, "/dev/cdc-wdm") {
+\t\t\tmode = domain.DataModeMBIM
+\t\t} else if iface != "" {
+\t\t\tmode = domain.DataModeRNDIS
+\t\t}
+\t}
+\tif err := s.validateSelectedDataPath(mode, iface); err != nil {
+\t\treturn "", err
+\t}
+
+\tswitch mode {
+\tcase domain.DataModeRNDIS:
+\t\tif s.net == nil {
+\t\t\treturn "", fmt.Errorf("RNDIS net helper not configured")
+\t\t}
+\t\tout, err := s.connectRNDIS(iface, req.Method, cid)
+\t\tif err == nil {
+\t\t\ts.markWANConnected(domain.DataModeRNDIS, "", iface, domain.WANMethodDHCP)
+\t\t}
+\t\treturn out, err
+\tcase domain.DataModeMBIM:
+\t\tif s.mbim == nil {
+\t\t\treturn "", errModemUnavailable
+\t\t}
+\t\tout, err := s.mbim.Connect(iface, apn)
+\t\tif err == nil {
+\t\t\ts.markWANConnected(domain.DataModeMBIM, iface, selectedNet, "")
+\t\t}
+\t\treturn out, err
+\tdefault:
+\t\treturn "", fmt.Errorf("unknown data mode %q (use rndis or mbim)", mode)
+\t}
+}''',
+          )
+
+          replace_block(
+              "internal/usecase/modem.go",
+              "// DataDisconnect tears down RNDIS or MBIM session.",
+              "// connectRNDIS activates the PDP context",
+              '''// DataDisconnect tears down RNDIS or MBIM session.
+func (s *ModemService) DataDisconnect(req domain.DataConnectRequest) (string, error) {
+\tmode, err := domain.ParseDataMode(string(req.Mode))
+\tif err != nil {
+\t\treturn "", err
+\t}
+\tiface := strings.TrimSpace(req.Iface)
+\ts.mu.RLock()
+\tselectedNet, selectedMBIM := s.selectedNet, s.selectedMBIM
+\tcurrentMode := s.status.WAN.Mode
+\tcid := s.status.APN.CID
+\ts.mu.RUnlock()
+
+\tif iface == "" {
+\t\tif mode == domain.DataModeAuto {
+\t\t\tswitch currentMode {
+\t\t\tcase domain.DataModeMBIM:
+\t\t\t\tmode, iface = domain.DataModeMBIM, selectedMBIM
+\t\t\tcase domain.DataModeRNDIS:
+\t\t\t\tmode, iface = domain.DataModeRNDIS, selectedNet
+\t\t\tdefault:
+\t\t\t\tif selectedMBIM != "" {
+\t\t\t\t\tmode, iface = domain.DataModeMBIM, selectedMBIM
+\t\t\t\t} else {
+\t\t\t\t\tmode, iface = domain.DataModeRNDIS, selectedNet
+\t\t\t\t}
+\t\t\t}
+\t\t} else if mode == domain.DataModeMBIM {
+\t\t\tiface = selectedMBIM
+\t\t} else {
+\t\t\tiface = selectedNet
+\t\t}
+\t}
+\tif mode == domain.DataModeAuto {
+\t\tif strings.HasPrefix(iface, "/dev/cdc-wdm") {
+\t\t\tmode = domain.DataModeMBIM
+\t\t} else if iface != "" {
+\t\t\tmode = domain.DataModeRNDIS
+\t\t}
+\t}
+\tif err := s.validateSelectedDataPath(mode, iface); err != nil {
+\t\treturn "", err
+\t}
+
+\tswitch mode {
+\tcase domain.DataModeRNDIS:
+\t\tif s.net == nil {
+\t\t\treturn "", fmt.Errorf("RNDIS net helper not configured")
+\t\t}
+\t\tout, err := s.net.DisconnectRNDIS(iface)
+\t\tif err != nil {
+\t\t\treturn out, err
+\t\t}
+\t\ts.markWANDisconnected(domain.DataModeRNDIS, "", iface)
+\t\tif s.at != nil {
+\t\t\tif cid <= 0 {
+\t\t\t\tcid = appdefaults.DefaultCID
+\t\t\t}
+\t\t\tvar pdpErr error
+\t\t\t_ = s.withAT(func() error {
+\t\t\t\tpdpErr = s.at.DeactivatePDP(cid)
+\t\t\t\treturn nil
+\t\t\t})
+\t\t\tif pdpErr != nil {
+\t\t\t\treturn strings.TrimSpace(out), fmt.Errorf("host interface disconnected; PDP deactivate failed: %w", pdpErr)
+\t\t\t}
+\t\t}
+\t\treturn out, nil
+\tcase domain.DataModeMBIM:
+\t\tif s.mbim == nil {
+\t\t\treturn "", errModemUnavailable
+\t\t}
+\t\tout, err := s.mbim.Disconnect(iface)
+\t\tif err == nil {
+\t\t\ts.markWANDisconnected(domain.DataModeMBIM, iface, selectedNet)
+\t\t}
+\t\treturn out, err
+\tdefault:
+\t\treturn "", fmt.Errorf("unknown data mode %q", mode)
+\t}
+}''',
+          )
+
+          replace_block(
+              "internal/usecase/modem.go",
+              "// connectRNDIS activates the PDP context",
+              "func (s *ModemService) setWANMethod",
+              '''// connectRNDIS activates the PDP context and configures the host via DHCP.
+// CGPADDR is telemetry only: it does not contain a trustworthy prefix or gateway,
+// so this path never paints guessed static network settings onto the host.
+func (s *ModemService) connectRNDIS(iface string, rawMethod domain.DataMethod, cid int) (string, error) {
+\tmethod, err := domain.ParseDataMethod(string(rawMethod))
+\tif err != nil {
+\t\treturn "", err
+\t}
+\tif method == domain.DataMethodStatic {
+\t\treturn "", fmt.Errorf("static RNDIS configuration is disabled: CGPADDR does not provide a subnet prefix or gateway; use DHCP")
+\t}
+\tif cid <= 0 {
+\t\tcid = appdefaults.DefaultCID
+\t}
+
+\tvar notes []string
+\tif s.at != nil {
+\t\tvar pdp domain.PDPSession
+\t\tvar activateErr, queryErr error
+\t\t_ = s.withAT(func() error {
+\t\t\tactivateErr = s.at.ActivatePDP(cid)
+\t\t\tpdp, queryErr = s.at.QueryPDP(cid)
+\t\t\treturn nil
+\t\t})
+\t\tif activateErr != nil {
+\t\t\tnotes = append(notes, "PDP activate warning: "+activateErr.Error())
+\t\t}
+\t\tif queryErr != nil {
+\t\t\tnotes = append(notes, "PDP query warning: "+queryErr.Error())
+\t\t} else {
+\t\t\ts.mu.Lock()
+\t\t\ts.status.PDP = pdp
+\t\t\ts.status.APN.IPAddr = pdp.IP
+\t\t\ts.mu.Unlock()
+\t\t\tif pdp.IP != "" {
+\t\t\t\tnotes = append(notes, "PDP "+pdp.IP)
+\t\t\t}
+\t\t}
+\t}
+
+\tout, dhcpErr := s.net.ConnectRNDIS(iface)
+\tif strings.TrimSpace(out) != "" {
+\t\tnotes = append(notes, strings.TrimSpace(out))
+\t}
+\tif dhcpErr != nil {
+\t\treturn strings.TrimSpace(strings.Join(notes, "\\n")), fmt.Errorf("dhcp: %w", dhcpErr)
+\t}
+\tif addrs := s.net.IfaceAddrs(iface); len(addrs) == 0 {
+\t\treturn strings.TrimSpace(strings.Join(notes, "\\n")), fmt.Errorf("DHCP completed but %s has no IPv4 address", iface)
+\t}
+\treturn strings.TrimSpace(strings.Join(notes, "\\n")), nil
+}''',
+          )
+
+          # UI: a modem with MBIM control + net interface gets one MBIM data option, not a
+          # fake RNDIS option. Also stop reporting failed disconnects as success.
+          replace_once(
+              "internal/template/assets/app.js",
+              '''    const dataOpts = [];
+    (modem && modem.net_ifaces ? modem.net_ifaces : []).forEach(p => {
+        dataOpts.push({
+            value: 'rndis:' + p.path,
+            label: p.label || (p.path + ' (RNDIS)'),
+            mode: 'rndis',
+            iface: p.path
+        });
+    });''',
+              '''    const dataOpts = [];
+    const modemUsesMBIM = !!(modem && (modem.data_mode === 'mbim' || modem.data_mode === 'mixed'));
+    if (!modemUsesMBIM) {
+        (modem && modem.net_ifaces ? modem.net_ifaces : []).forEach(p => {
+            dataOpts.push({
+                value: 'rndis:' + p.path,
+                label: p.label || (p.path + ' (RNDIS)'),
+                mode: 'rndis',
+                iface: p.path
+            });
+        });
+    }''',
+          )
+          replace_once(
+              "internal/template/assets/app.js",
+              '''            (m.net_ifaces || []).forEach(p => {
+                dataOpts.push({
+                    value: 'rndis:' + p.path,
+                    label: (m.name ? m.name + ' · ' : '') + (p.label || p.path),
+                    mode: 'rndis',
+                    iface: p.path
+                });
+            });''',
+              '''            if (m.data_mode !== 'mbim' && m.data_mode !== 'mixed') {
+                (m.net_ifaces || []).forEach(p => {
+                    dataOpts.push({
+                        value: 'rndis:' + p.path,
+                        label: (m.name ? m.name + ' · ' : '') + (p.label || p.path),
+                        mode: 'rndis',
+                        iface: p.path
+                    });
+                });
+            }''',
+          )
+          replace_once(
+              "internal/template/assets/app.js",
+              '''    let dataSelected = '';
+    if (modemInventory && modemInventory.selected_net) {
+        dataSelected = 'rndis:' + modemInventory.selected_net;
+    } else if (modemInventory && modemInventory.selected_mbim) {
+        dataSelected = 'mbim:' + modemInventory.selected_mbim;
+    }''',
+              '''    let dataSelected = '';
+    if (modemUsesMBIM && modemInventory && modemInventory.selected_mbim) {
+        dataSelected = 'mbim:' + modemInventory.selected_mbim;
+    } else if (modemInventory && modemInventory.selected_net) {
+        dataSelected = 'rndis:' + modemInventory.selected_net;
+    } else if (modemInventory && modemInventory.selected_mbim) {
+        dataSelected = 'mbim:' + modemInventory.selected_mbim;
+    }''',
+          )
+          replace_once(
+              "internal/template/assets/app.js",
+              '''        const res = await resp.json();
+        dataSessionNote = 'disconnected';
+        setText('data-status', dataSessionNote);
+        toast('WAN disconnected', 'ok');
+        logConsole(`Data disconnect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\\n${res.output || ''}`);''',
+              '''        const res = await resp.json();
+        const ok = resp.ok && !res.error;
+        dataSessionNote = ok ? 'disconnected' : (res.error || 'disconnect failed');
+        setText('data-status', dataSessionNote);
+        toast(ok ? 'WAN disconnected' : ('Disconnect: ' + (res.error || 'failed')), ok ? 'ok' : 'err');
+        logConsole(`Data disconnect (${sel.mode} ${sel.iface}): ${res.status || res.error || ''}\\n${res.output || ''}`);''',
+          )
+          replace_once(
+              "internal/template/assets/app.js",
+              '''    setText('wan-rx-rate', wan.rx_rate_bps ? fmtRate(wan.rx_rate_bps) : '-');
+    setText('wan-tx-rate', wan.tx_rate_bps ? fmtRate(wan.tx_rate_bps) : '-');''',
+              '''    const rxPerSec = wan.rx_bytes_per_sec || wan.rx_rate_bps;
+    const txPerSec = wan.tx_bytes_per_sec || wan.tx_rate_bps;
+    setText('wan-rx-rate', rxPerSec ? fmtRate(rxPerSec) : '-');
+    setText('wan-tx-rate', txPerSec ? fmtRate(txPerSec) : '-');''',
+          )
+
+          replace_once(
+              "internal/template/assets/features/wan/panel.html",
+              '''                <select id="wan-method-select">
+                    <option value="auto">Auto (DHCP, then PDP static)</option>
+                    <option value="dhcp">DHCP only</option>
+                    <option value="static">PDP static only (CGPADDR)</option>
+                </select>''',
+              '''                <select id="wan-method-select">
+                    <option value="auto">Auto (DHCP)</option>
+                    <option value="dhcp">DHCP only</option>
+                </select>''',
+          )
+          replace_once(
+              "internal/template/assets/features/wan/panel.html",
+              '''            <p class="hint" id="data-hint">FM350 often uses <strong>RNDIS</strong> (network iface), not MBIM. Auto tries DHCP first, then paints the PDP IPv4 from AT+CGPADDR onto the iface. Does not rewrite /etc/resolv.conf.</p>''',
+              '''            <p class="hint" id="data-hint">RNDIS uses DHCP. MBIM uses its cdc-wdm control endpoint with the paired host network interface. PDP IP/DNS shown above are modem telemetry only; the manager no longer invents a /24 subnet or .1 gateway from CGPADDR.</p>''',
+          )
+
+          # Tests: update interface contract fakes and old expectations.
+          replace_once(
+              "internal/usecase/modem_test.go",
+              "func (f *fakeAT) ActivatePDP(int) error { return nil }\nfunc (f *fakeAT) QueryPDP",
+              "func (f *fakeAT) ActivatePDP(int) error   { return nil }\nfunc (f *fakeAT) DeactivatePDP(int) error { return nil }\nfunc (f *fakeAT) QueryPDP",
+          )
+          replace_once(
+              "internal/usecase/modem_test.go",
+              "func (f *fakeATPerm) ActivatePDP(int) error { return errors.New(\"permission denied\") }\nfunc (f *fakeATPerm) QueryPDP",
+              "func (f *fakeATPerm) ActivatePDP(int) error   { return errors.New(\"permission denied\") }\nfunc (f *fakeATPerm) DeactivatePDP(int) error { return errors.New(\"permission denied\") }\nfunc (f *fakeATPerm) QueryPDP",
+          )
+          replace_once(
+              "internal/usecase/modem_test.go",
+              '''func (f *fakeNet) IfaceAddrs(string) []string            { return f.addrs }
+func (f *fakeNet) IfaceCounters(string) (uint64, uint64) { return f.rx, f.tx }''',
+              '''func (f *fakeNet) IfaceAddrs(string) []string {
+\tif f.addrs != nil {
+\t\treturn f.addrs
+\t}
+\tif f.lastConnect != "" && f.connectErr == nil {
+\t\treturn []string{"192.0.2.2"}
+\t}
+\treturn nil
+}
+func (f *fakeNet) IfaceCounters(string) (uint64, uint64) { return f.rx, f.tx }''',
+          )
+          replace_block(
+              "internal/usecase/modem_test.go",
+              "func TestDataConnectAutoPrefersRNDIS(t *testing.T) {",
+              "func TestDataConnectMBIMUsesAPNFromStatus",
+              '''func TestDataConnectAutoPrefersMBIMControlPath(t *testing.T) {
+\tnet := &fakeNet{connectOut: "ok"}
+\tmbim := &fakeMBIM{}
+\tsvc := NewModemService(ModemServiceConfig{
+\t\tUSB:  &fakeUSB{status: domain.ModemStatus{Connected: true}},
+\t\tAT:   &fakeAT{port: "/dev/ttyUSB0"},
+\t\tNet:  net,
+\t\tMBIM: mbim,
+\t})
+\tsvc.selectedNet = "wwan0"
+\tsvc.selectedMBIM = "/dev/cdc-wdm0"
+\tif _, err := svc.DataConnect(domain.DataConnectRequest{}); err != nil {
+\t\tt.Fatal(err)
+\t}
+\tif mbim.lastConnectDev != "/dev/cdc-wdm0" {
+\t\tt.Fatalf("auto should prefer MBIM control device, got %q", mbim.lastConnectDev)
+\t}
+\tif net.lastConnect != "" {
+\t\tt.Fatalf("MBIM host iface must not be treated as RNDIS, got %q", net.lastConnect)
+\t}
+}''',
+          )
+          replace_block(
+              "internal/usecase/modem_test.go",
+              "func TestDataConnectRNDISStaticFallback(t *testing.T) {",
+              "func TestDataDisconnectRNDIS",
+              '''func TestDataConnectRNDISDoesNotGuessStaticFallback(t *testing.T) {
+\tnet := &fakeNet{connectErr: errors.New("dhcp timeout")}
+\tat := &fakeAT{port: "/dev/ttyUSB0", pdp: domain.PDPSession{IP: "10.64.1.8"}}
+\tsvc := NewModemService(ModemServiceConfig{
+\t\tUSB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+\t\tAT:  at,
+\t\tNet: net,
+\t})
+\tsvc.selectedNet = "enxabc"
+\t_, err := svc.DataConnect(domain.DataConnectRequest{Mode: domain.DataModeRNDIS, Iface: "enxabc"})
+\tif err == nil {
+\t\tt.Fatal("expected DHCP failure instead of guessed static fallback")
+\t}
+\tif net.lastStatic != "" {
+\t\tt.Fatalf("must not paint guessed static config, got %q", net.lastStaticAddr)
+\t}
+}
+
+func TestDataConnectRNDISStaticRejectedWithoutRealNetworkConfig(t *testing.T) {
+\tnet := &fakeNet{}
+\tsvc := NewModemService(ModemServiceConfig{
+\t\tUSB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+\t\tAT:  &fakeAT{port: "/dev/ttyUSB0"},
+\t\tNet: net,
+\t})
+\tsvc.selectedNet = "enx1"
+\t_, err := svc.DataConnect(domain.DataConnectRequest{
+\t\tMode: domain.DataModeRNDIS, Iface: "enx1", Method: domain.DataMethodStatic,
+\t})
+\tif err == nil {
+\t\tt.Fatal("expected unsafe static method to be rejected")
+\t}
+\tif net.lastStatic != "" {
+\t\tt.Fatal("static helper should not run without explicit prefix/gateway")
+\t}
+}''',
+          )
+          replace_once(
+              "internal/usecase/modem_test.go",
+              '''\tif mbim.lastConnectDev != "/dev/cdc-wdm0" || mbim.lastConnectAPN != "internet.mnc" {
+\t\tt.Fatalf("dev=%q apn=%q", mbim.lastConnectDev, mbim.lastConnectAPN)
+\t}
+}''',
+              '''\tif mbim.lastConnectDev != "/dev/cdc-wdm0" || mbim.lastConnectAPN != "internet.mnc" {
+\t\tt.Fatalf("dev=%q apn=%q", mbim.lastConnectDev, mbim.lastConnectAPN)
+\t}
+\twan := svc.CachedStatus().WAN
+\tif wan.Mode != domain.DataModeMBIM || wan.ControlDevice != "/dev/cdc-wdm0" || wan.Session != domain.WANSessionConnected {
+\t\tt.Fatalf("wan state not updated for MBIM: %+v", wan)
+\t}
+}''',
+          )
+
+          replace_once(
+              "internal/repository/net_iface_test.go",
+              '{1, 1, "mixed"},\n\t\t{2, 3, "mixed"},',
+              '{1, 1, "mbim"},\n\t\t{2, 3, "mbim"},',
+          )
+
+          write(
+              "internal/usecase/wan_security_test.go",
+              '''package usecase
+
+import (
+\t"strings"
+\t"testing"
+
+\t"fm350-monitor/internal/pkg/domain"
+)
+
+func TestSelectModemRejectsForeignNetInterface(t *testing.T) {
+\tsvc := NewModemService(ModemServiceConfig{
+\t\tUSB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+\t\tAT:  &fakeAT{port: "/dev/ttyUSB0"},
+\t\tInventory: &fakeInventory{modems: []domain.ModemDevice{
+\t\t\t{ID: "usb:a", ATPorts: []domain.ModemInterface{{Path: "/dev/ttyUSB0", Kind: domain.IfaceKindAT}}, NetIfaces: []domain.ModemInterface{{Path: "enxa", Kind: domain.IfaceKindNet}}},
+\t\t\t{ID: "usb:b", NetIfaces: []domain.ModemInterface{{Path: "enxb", Kind: domain.IfaceKindNet}}},
+\t\t}},
+\t})
+\t_, err := svc.SelectModem(domain.ModemSelectRequest{ModemID: "usb:a", NetIface: "enxb"})
+\tif err == nil || !strings.Contains(err.Error(), "does not belong") {
+\t\tt.Fatalf("expected ownership error, got %v", err)
+\t}
+}
+
+func TestDataDisconnectRejectsUnselectedHostInterface(t *testing.T) {
+\tsvc := NewModemService(ModemServiceConfig{
+\t\tUSB: &fakeUSB{status: domain.ModemStatus{Connected: true}},
+\t\tAT:  &fakeAT{port: "/dev/ttyUSB0"},
+\t\tNet: &fakeNet{},
+\t})
+\tsvc.selectedNet = "enx-safe"
+\t_, err := svc.DataDisconnect(domain.DataConnectRequest{Mode: domain.DataModeRNDIS, Iface: "eth0"})
+\tif err == nil || !strings.Contains(err.Error(), "not the selected") {
+\t\tt.Fatalf("expected selected-interface guard, got %v", err)
+\t}
+}
+''',
+          )
+
+          write(
+              "internal/repository/at_tiered_stale_test.go",
+              '''package repository
+
+import (
+\t"testing"
+
+\t"fm350-monitor/internal/pkg/domain"
+)
+
+func TestRefreshMediumClearsStalePDPStateOnSuccessfulEmptyReplies(t *testing.T) {
+\tc := &TieredClient{Client: NewClient("/dev/test")}
+\tc.sendFn = func(cmd string) (string, error) {
+\t\tswitch cmd {
+\t\tcase CmdCGPADDR(1):
+\t\t\treturn "+CGPADDR: 1,\"0.0.0.0\"\\r\\nOK", nil
+\t\tcase CmdGTDNS(1):
+\t\t\treturn "+GTDNS: 1,\"0.0.0.0\",\"0.0.0.0\"\\r\\nOK", nil
+\t\tdefault:
+\t\t\treturn "OK", nil
+\t\t}
+\t}
+\tcache := tieredPollCache{
+\t\tapn: domain.APNConfig{CID: 1},
+\t\tpdp: domain.PDPSession{CID: 1, IP: "10.0.0.2", Gateway: "10.0.0.1", DNS1: "8.8.8.8", DNS2: "1.1.1.1"},
+\t}
+\tc.refreshMedium(&cache)
+\tif cache.pdp.IP != "" || cache.pdp.Gateway != "" || cache.pdp.DNS1 != "" || cache.pdp.DNS2 != "" {
+\t\tt.Fatalf("stale PDP state survived successful empty reply: %+v", cache.pdp)
+\t}
+}
+''',
+          )
+          PY
+
+      - name: Format changed Go files
+        run: |
+          gofmt -w \
+            internal/pkg/domain/inventory.go \
+            internal/pkg/domain/modem.go \
+            internal/repository/at_client.go \
+            internal/repository/at_tiered.go \
+            internal/repository/at_tiered_control.go \
+            internal/repository/at_tiered_stale_test.go \
+            internal/repository/inventory.go \
+            internal/repository/net_iface.go \
+            internal/repository/net_iface_test.go \
+            internal/usecase/modem.go \
+            internal/usecase/modem_test.go \
+            internal/usecase/ports.go \
+            internal/usecase/wan_selection.go \
+            internal/usecase/wan_security_test.go
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: JavaScript syntax
+        run: node --check internal/template/assets/app.js
+      - name: Commit validated WAN fixes
+        shell: bash
+        run: |
+          git config user.name "thorn"
+          git config user.email "37927965+phongsathornpt@users.noreply.github.com"
+          git add internal
+          git commit -m "fix: harden WAN data path handling"
+          git push origin HEAD:fix/wan-data-path
