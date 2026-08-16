@@ -62,11 +62,11 @@
             <h2>Thailand radio profiles</h2>
             <div class="button-group">
                 <button type="button" class="btn-primary" onclick="setRAT('th-nsa')">Thailand NSA</button>
-                <button type="button" onclick="setRAT('th-nsa-b40-n41')">NSA B40/B41</button>
+                <button type="button" onclick="setRAT('th-nsa-b40-n41')">NSA B40 + n41</button>
                 <button type="button" onclick="setRAT('th-lte')">Thailand 4G</button>
                 <button type="button" onclick="setRAT('th-lte-b40-b41')">4G B40/B41</button>
             </div>
-            <p class="hint mt-15">Thailand NSA keeps EN-DC and a practical LTE anchor shortlist. B40/B41 profiles are aggressive locks and may lose service outside matching cells. NR n41 remains network/firmware selected; verify the active NR band in EN-DC Bands / Carrier aggregation.</p>
+            <p class="hint mt-15">Thailand NSA keeps EN-DC with common LTE anchors and requests NR n41. The strict B40 + n41 profile can improve selection on a known matching site, but may lose service elsewhere. Verify the live anchor and NR carrier in EN-DC Bands / Carrier aggregation.</p>
             <p class="hint">MIMO layers and QAM are negotiated by the modem/network. The table below reports active MIMO and modulation instead of forcing unsupported values.</p>
         </section>
         <section class="card">
