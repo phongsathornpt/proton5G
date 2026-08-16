@@ -54,6 +54,30 @@ OK`
 	}
 }
 
+func TestParseGTCAINFOComponentsMarksUplinkConfiguredSCC(t *testing.T) {
+	raw := `+GTCAINFO:
+PCC:140,38650,38650,100,10,2,4,3
+SCC 1:2,1,103,20,1444,50,25,2,1,3,2,13,-9,-81
+OK`
+
+	got := ParseGTCAINFOComponents(raw)
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2", len(got))
+	}
+	if !got[0].ULActive {
+		t.Fatalf("PCC should be uplink-active")
+	}
+	if !got[1].ULActive {
+		t.Fatalf("uplink-configured SCC should be uplink-active")
+	}
+	if got[0].Band != "B40" {
+		t.Fatalf("PCC band=%q want B40", got[0].Band)
+	}
+	if got[1].Band != "B3" {
+		t.Fatalf("SCC band=%q want B3", got[1].Band)
+	}
+}
+
 func TestThailandGTACTProfiles(t *testing.T) {
 	tests := map[domain.RATModePref]string{
 		domain.RATPrefTHNSA:       CmdGTACTSetTHNSA,
