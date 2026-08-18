@@ -22,6 +22,10 @@ type smsATRepository interface {
 	DeleteSMS(index int) error
 }
 
+type smsNotificationRepository interface {
+	DrainSMSNotifications() []domain.SMSNotification
+}
+
 type smsGuardState struct {
 	mu          sync.Mutex
 	windowStart time.Time
@@ -37,14 +41,20 @@ type smsIdemEntry struct {
 var smsGuards sync.Map // map[*ModemService]*smsGuardState; one state per daemon service
 
 func (s *ModemService) smsAT() (smsATRepository, error) {
-	if s.at == nil { return nil, errModemUnavailable }
+	if s.at == nil {
+		return nil, errModemUnavailable
+	}
 	at, ok := s.at.(smsATRepository)
-	if !ok { return nil, fmt.Errorf("SMS is not supported by the active AT repository") }
+	if !ok {
+		return nil, fmt.Errorf("SMS is not supported by the active AT repository")
+	}
 	return at, nil
 }
 
 func (s *ModemService) smsGuard() *smsGuardState {
-	if v, ok := smsGuards.Load(s); ok { return v.(*smsGuardState) }
+	if v, ok := smsGuards.Load(s); ok {
+		return v.(*smsGuardState)
+	}
 	g := &smsGuardState{idem: make(map[string]smsIdemEntry)}
 	actual, _ := smsGuards.LoadOrStore(s, g)
 	return actual.(*smsGuardState)
@@ -54,7 +64,9 @@ func (s *ModemService) ListSMS() ([]domain.SMSMessage, error) {
 	var out []domain.SMSMessage
 	err := s.withAT(func() error {
 		at, err := s.smsAT()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		out, err = at.ListSMS()
 		return err
 	})
@@ -63,10 +75,14 @@ func (s *ModemService) ListSMS() ([]domain.SMSMessage, error) {
 
 func (s *ModemService) ReadSMS(index int) (domain.SMSMessage, error) {
 	var out domain.SMSMessage
-	if index < 0 { return out, fmt.Errorf("invalid SMS index") }
+	if index < 0 {
+		return out, fmt.Errorf("invalid SMS index")
+	}
 	err := s.withAT(func() error {
 		at, err := s.smsAT()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		out, err = at.ReadSMS(index)
 		return err
 	})
@@ -74,12 +90,28 @@ func (s *ModemService) ReadSMS(index int) (domain.SMSMessage, error) {
 }
 
 func (s *ModemService) DeleteSMS(index int) error {
-	if index < 0 { return fmt.Errorf("invalid SMS index") }
+	if index < 0 {
+		return fmt.Errorf("invalid SMS index")
+	}
 	return s.withAT(func() error {
 		at, err := s.smsAT()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		return at.DeleteSMS(index)
 	})
+}
+
+func (s *ModemService) SMSNotifications() []domain.SMSNotification {
+	if s.at == nil {
+		return nil
+	}
+	at, ok := s.at.(smsNotificationRepository)
+	if !ok {
+		return nil
+	}
+	// Queue operations are internally synchronized and perform no serial I/O.
+	return at.DrainSMSNotifications()
 }
 
 func (s *ModemService) SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult, error) {
@@ -87,14 +119,23 @@ func (s *ModemService) SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult,
 	req.To = strings.TrimSpace(req.To)
 	req.Body = strings.TrimSpace(req.Body)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.To == "" { return zero, fmt.Errorf("SMS destination is required") }
-	if req.Body == "" { return zero, fmt.Errorf("SMS body is required") }
+	if req.To == "" {
+		return zero, fmt.Errorf("SMS destination is required")
+	}
+	if req.Body == "" {
+		return zero, fmt.Errorf("SMS body is required")
+	}
+	if len([]rune(req.Body)) > 1000 {
+		return zero, fmt.Errorf("SMS body exceeds 1000 characters")
+	}
 
 	g := s.smsGuard()
 	now := time.Now()
 	g.mu.Lock()
 	for key, entry := range g.idem {
-		if now.Sub(entry.at) > smsIdemTTL { delete(g.idem, key) }
+		if now.Sub(entry.at) > smsIdemTTL {
+			delete(g.idem, key)
+		}
 	}
 	if req.IdempotencyKey != "" {
 		if entry, ok := g.idem[req.IdempotencyKey]; ok {
@@ -116,11 +157,15 @@ func (s *ModemService) SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult,
 	var result domain.SMSSendResult
 	err := s.withAT(func() error {
 		at, err := s.smsAT()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		result, err = at.SendSMS(req)
 		return err
 	})
-	if err != nil { return zero, err }
+	if err != nil {
+		return zero, err
+	}
 
 	if req.IdempotencyKey != "" {
 		g.mu.Lock()
