@@ -131,7 +131,8 @@ func (c *Client) sendRawLocked(cmd string) (string, error) {
 		cleanCmd += "\r"
 	}
 
-	_ = c.port.ResetInputBuffer()
+	// Do not ResetInputBuffer here. The modem may have queued SMS URCs between
+	// polling commands; resetting would silently lose +CMTI/+CMT/+CDS events.
 	if _, err := c.port.Write([]byte(cleanCmd)); err != nil {
 		_ = c.port.Close()
 		c.port = nil
@@ -147,7 +148,7 @@ func (c *Client) sendRawLocked(cmd string) (string, error) {
 		if n > 0 {
 			resp = append(resp, buf[:n]...)
 			str := string(resp)
-			if strings.Contains(str, ATResultOK) || strings.Contains(str, ATResultERROR) {
+			if strings.Contains(str, ATResultOK) || strings.Contains(str, ATResultERROR) || strings.Contains(str, "+CMS ERROR:") {
 				break
 			}
 		}
@@ -165,7 +166,7 @@ func (c *Client) sendRawLocked(cmd string) (string, error) {
 		return "", fmt.Errorf("empty AT response from %s", c.portName)
 	}
 
-	return strings.TrimSpace(string(resp)), nil
+	return c.storeAndStripSMSURCs(string(resp)), nil
 }
 
 func (c *Client) GetFullStatus() (domain.ATPoll, error) {
