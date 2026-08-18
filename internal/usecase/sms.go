@@ -15,6 +15,13 @@ const (
 	smsIdemTTL    = 10 * time.Minute
 )
 
+type smsATRepository interface {
+	ListSMS() ([]domain.SMSMessage, error)
+	ReadSMS(index int) (domain.SMSMessage, error)
+	SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult, error)
+	DeleteSMS(index int) error
+}
+
 type smsGuardState struct {
 	mu          sync.Mutex
 	windowStart time.Time
@@ -29,10 +36,15 @@ type smsIdemEntry struct {
 
 var smsGuards sync.Map // map[*ModemService]*smsGuardState; one state per daemon service
 
+func (s *ModemService) smsAT() (smsATRepository, error) {
+	if s.at == nil { return nil, errModemUnavailable }
+	at, ok := s.at.(smsATRepository)
+	if !ok { return nil, fmt.Errorf("SMS is not supported by the active AT repository") }
+	return at, nil
+}
+
 func (s *ModemService) smsGuard() *smsGuardState {
-	if v, ok := smsGuards.Load(s); ok {
-		return v.(*smsGuardState)
-	}
+	if v, ok := smsGuards.Load(s); ok { return v.(*smsGuardState) }
 	g := &smsGuardState{idem: make(map[string]smsIdemEntry)}
 	actual, _ := smsGuards.LoadOrStore(s, g)
 	return actual.(*smsGuardState)
@@ -41,9 +53,9 @@ func (s *ModemService) smsGuard() *smsGuardState {
 func (s *ModemService) ListSMS() ([]domain.SMSMessage, error) {
 	var out []domain.SMSMessage
 	err := s.withAT(func() error {
-		if s.at == nil { return errModemUnavailable }
-		var err error
-		out, err = s.at.ListSMS()
+		at, err := s.smsAT()
+		if err != nil { return err }
+		out, err = at.ListSMS()
 		return err
 	})
 	return out, err
@@ -53,9 +65,9 @@ func (s *ModemService) ReadSMS(index int) (domain.SMSMessage, error) {
 	var out domain.SMSMessage
 	if index < 0 { return out, fmt.Errorf("invalid SMS index") }
 	err := s.withAT(func() error {
-		if s.at == nil { return errModemUnavailable }
-		var err error
-		out, err = s.at.ReadSMS(index)
+		at, err := s.smsAT()
+		if err != nil { return err }
+		out, err = at.ReadSMS(index)
 		return err
 	})
 	return out, err
@@ -64,8 +76,9 @@ func (s *ModemService) ReadSMS(index int) (domain.SMSMessage, error) {
 func (s *ModemService) DeleteSMS(index int) error {
 	if index < 0 { return fmt.Errorf("invalid SMS index") }
 	return s.withAT(func() error {
-		if s.at == nil { return errModemUnavailable }
-		return s.at.DeleteSMS(index)
+		at, err := s.smsAT()
+		if err != nil { return err }
+		return at.DeleteSMS(index)
 	})
 }
 
@@ -102,9 +115,9 @@ func (s *ModemService) SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult,
 
 	var result domain.SMSSendResult
 	err := s.withAT(func() error {
-		if s.at == nil { return errModemUnavailable }
-		var err error
-		result, err = s.at.SendSMS(req)
+		at, err := s.smsAT()
+		if err != nil { return err }
+		result, err = at.SendSMS(req)
 		return err
 	})
 	if err != nil { return zero, err }
