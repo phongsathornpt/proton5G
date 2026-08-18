@@ -1,0 +1,118 @@
+package usecase
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"fm350-monitor/internal/pkg/domain"
+)
+
+const (
+	smsRateWindow = time.Minute
+	smsRateMax    = 10
+	smsIdemTTL    = 10 * time.Minute
+)
+
+type smsGuardState struct {
+	mu          sync.Mutex
+	windowStart time.Time
+	windowCount int
+	idem        map[string]smsIdemEntry
+}
+
+type smsIdemEntry struct {
+	result domain.SMSSendResult
+	at     time.Time
+}
+
+var smsGuards sync.Map // map[*ModemService]*smsGuardState; one state per daemon service
+
+func (s *ModemService) smsGuard() *smsGuardState {
+	if v, ok := smsGuards.Load(s); ok {
+		return v.(*smsGuardState)
+	}
+	g := &smsGuardState{idem: make(map[string]smsIdemEntry)}
+	actual, _ := smsGuards.LoadOrStore(s, g)
+	return actual.(*smsGuardState)
+}
+
+func (s *ModemService) ListSMS() ([]domain.SMSMessage, error) {
+	var out []domain.SMSMessage
+	err := s.withAT(func() error {
+		if s.at == nil { return errModemUnavailable }
+		var err error
+		out, err = s.at.ListSMS()
+		return err
+	})
+	return out, err
+}
+
+func (s *ModemService) ReadSMS(index int) (domain.SMSMessage, error) {
+	var out domain.SMSMessage
+	if index < 0 { return out, fmt.Errorf("invalid SMS index") }
+	err := s.withAT(func() error {
+		if s.at == nil { return errModemUnavailable }
+		var err error
+		out, err = s.at.ReadSMS(index)
+		return err
+	})
+	return out, err
+}
+
+func (s *ModemService) DeleteSMS(index int) error {
+	if index < 0 { return fmt.Errorf("invalid SMS index") }
+	return s.withAT(func() error {
+		if s.at == nil { return errModemUnavailable }
+		return s.at.DeleteSMS(index)
+	})
+}
+
+func (s *ModemService) SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult, error) {
+	var zero domain.SMSSendResult
+	req.To = strings.TrimSpace(req.To)
+	req.Body = strings.TrimSpace(req.Body)
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.To == "" { return zero, fmt.Errorf("SMS destination is required") }
+	if req.Body == "" { return zero, fmt.Errorf("SMS body is required") }
+
+	g := s.smsGuard()
+	now := time.Now()
+	g.mu.Lock()
+	for key, entry := range g.idem {
+		if now.Sub(entry.at) > smsIdemTTL { delete(g.idem, key) }
+	}
+	if req.IdempotencyKey != "" {
+		if entry, ok := g.idem[req.IdempotencyKey]; ok {
+			g.mu.Unlock()
+			return entry.result, nil
+		}
+	}
+	if g.windowStart.IsZero() || now.Sub(g.windowStart) >= smsRateWindow {
+		g.windowStart = now
+		g.windowCount = 0
+	}
+	if g.windowCount >= smsRateMax {
+		g.mu.Unlock()
+		return zero, fmt.Errorf("SMS send rate limit exceeded; retry later")
+	}
+	g.windowCount++
+	g.mu.Unlock()
+
+	var result domain.SMSSendResult
+	err := s.withAT(func() error {
+		if s.at == nil { return errModemUnavailable }
+		var err error
+		result, err = s.at.SendSMS(req)
+		return err
+	})
+	if err != nil { return zero, err }
+
+	if req.IdempotencyKey != "" {
+		g.mu.Lock()
+		g.idem[req.IdempotencyKey] = smsIdemEntry{result: result, at: time.Now()}
+		g.mu.Unlock()
+	}
+	return result, nil
+}
