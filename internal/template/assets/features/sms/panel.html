@@ -1,0 +1,30 @@
+{{define "panel-sms"}}
+<section class="panel" data-panel="sms" id="panel-sms" hidden>
+    <div class="panel-heading">
+        <div>
+            <h2>SMS</h2>
+            <p class="muted">Read and send messages through the modem SIM.</p>
+        </div>
+        <button type="button" class="btn secondary" id="sms-refresh-btn">Refresh inbox</button>
+    </div>
+
+    <div class="sms-grid">
+        <div class="card">
+            <h3>Inbox</h3>
+            <div id="sms-status" class="muted">Not loaded</div>
+            <div id="sms-list" class="sms-list"></div>
+        </div>
+
+        <div class="card">
+            <h3>Send message</h3>
+            <label for="sms-to">Phone number</label>
+            <input id="sms-to" type="tel" placeholder="+66812345678" autocomplete="tel">
+            <label for="sms-body">Message</label>
+            <textarea id="sms-body" rows="7" maxlength="1000" placeholder="Message text"></textarea>
+            <div id="sms-meta" class="muted">GSM-7: 160 chars/segment · Unicode: 70 chars/segment</div>
+            <button type="button" class="btn primary" id="sms-send-btn">Send SMS</button>
+            <div id="sms-send-status" class="muted"></div>
+        </div>
+    </div>
+</section>
+{{end}}

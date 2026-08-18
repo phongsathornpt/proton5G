@@ -99,6 +99,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/hotspot/config", s.handleHotspotConfig)
 	mux.HandleFunc("POST /api/hotspot/start", s.handleHotspotStart)
 	mux.HandleFunc("POST /api/hotspot/stop", s.handleHotspotStop)
+	s.registerSMSRoutes(mux)
 
 	var h http.Handler = mux
 	if s.token != "" {
@@ -154,7 +155,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fan-out from shared hub (marshal once). Cache only — poller owns AT I/O.
 	ch, unsub := s.hub.Subscribe()
 	defer unsub()
 
@@ -166,20 +166,13 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// First frame: hub last snapshot if present, else marshal cache now.
 	select {
 	case payload, ok := <-ch:
-		if !ok {
-			return
-		}
-		if !writeFrame(payload) {
-			return
-		}
+		if !ok { return }
+		if !writeFrame(payload) { return }
 	default:
 		if raw, err := json.Marshal(s.svc.CachedStatus()); err == nil {
-			if !writeFrame(raw) {
-				return
-			}
+			if !writeFrame(raw) { return }
 		}
 	}
 
@@ -188,12 +181,8 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case payload, ok := <-ch:
-			if !ok {
-				return
-			}
-			if !writeFrame(payload) {
-				return
-			}
+			if !ok { return }
+			if !writeFrame(payload) { return }
 		}
 	}
 }
@@ -218,9 +207,7 @@ func (s *Server) handleSetAPN(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetRAT(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Mode string `json:"mode"`
-	}
+	var req struct { Mode string `json:"mode"` }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -238,9 +225,7 @@ func (s *Server) handleSetRAT(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRawAT(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Command string `json:"command"`
-	}
+	var req struct { Command string `json:"command"` }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -268,15 +253,11 @@ func (s *Server) handleMBIMStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMBIMConnect(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		APN    string `json:"apn"`
-		Device string `json:"device"`
-	}
+	var req struct { APN string `json:"apn"`; Device string `json:"device"` }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	out, err := s.svc.MBIMConnect(req.Device, req.APN)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -287,14 +268,11 @@ func (s *Server) handleMBIMConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMBIMDisconnect(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Device string `json:"device"`
-	}
+	var req struct { Device string `json:"device"` }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	out, err := s.svc.MBIMDisconnect(req.Device)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -340,9 +318,7 @@ func (s *Server) handleGetUSBMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetUSBMode(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Mode int `json:"mode"`
-	}
+	var req struct { Mode int `json:"mode"` }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
