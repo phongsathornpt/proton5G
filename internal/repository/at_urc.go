@@ -1,8 +1,12 @@
 package repository
 
 import (
+	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"fm350-monitor/internal/pkg/domain"
 )
 
 var clientURCs sync.Map // map[*Client]*urcQueue
@@ -56,5 +60,37 @@ func (c *Client) DrainSMSURCs() []string {
 	defer q.mu.Unlock()
 	out := append([]string(nil), q.items...)
 	q.items = nil
+	return out
+}
+
+func (c *Client) DrainSMSNotifications() []domain.SMSNotification {
+	raw := c.DrainSMSURCs()
+	out := make([]domain.SMSNotification, 0, len(raw))
+	now := time.Now().UTC()
+	for _, line := range raw {
+		n := domain.SMSNotification{Raw: line, ReceivedAt: now}
+		switch {
+		case strings.HasPrefix(line, "+CMTI:"):
+			n.Type = domain.SMSNotificationStored
+			fields := splitCSVQuoted(strings.TrimSpace(strings.TrimPrefix(line, "+CMTI:")))
+			if len(fields) >= 2 {
+				n.Storage = strings.Trim(fields[0], "\" ")
+				n.Index, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
+			}
+		case strings.HasPrefix(line, "+CDS:"):
+			n.Type = domain.SMSNotificationDeliveryReport
+			// In text mode many modems include the message reference as the first
+			// numeric field; retain the raw URC as the authoritative representation.
+			fields := splitCSVQuoted(strings.TrimSpace(strings.TrimPrefix(line, "+CDS:")))
+			if len(fields) > 0 {
+				n.MessageRef, _ = strconv.Atoi(strings.Trim(fields[0], "\" "))
+			}
+		case strings.HasPrefix(line, "+CMT:"):
+			n.Type = domain.SMSNotificationDirect
+		default:
+			continue
+		}
+		out = append(out, n)
+	}
 	return out
 }
