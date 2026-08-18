@@ -24,10 +24,6 @@ type ATRepository interface {
 	SetUSBMode(mode int) error
 	ActivatePDP(cid int) error
 	QueryPDP(cid int) (domain.PDPSession, error)
-	ListSMS() ([]domain.SMSMessage, error)
-	ReadSMS(index int) (domain.SMSMessage, error)
-	SendSMS(req domain.SMSSendRequest) (domain.SMSSendResult, error)
-	DeleteSMS(index int) error
 }
 
 // HistoryRepository abstracts signal sample storage.
