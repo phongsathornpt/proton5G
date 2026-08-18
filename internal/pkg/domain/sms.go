@@ -19,6 +19,14 @@ const (
 	SMSStatusAll            SMSStatus = "ALL"
 )
 
+type SMSNotificationType string
+
+const (
+	SMSNotificationStored         SMSNotificationType = "stored"
+	SMSNotificationDirect         SMSNotificationType = "direct"
+	SMSNotificationDeliveryReport SMSNotificationType = "delivery_report"
+)
+
 type SMSMessage struct {
 	Index     int         `json:"index"`
 	Status    SMSStatus   `json:"status"`
@@ -41,8 +49,11 @@ type SMSSendResult struct {
 	SubmittedAt time.Time   `json:"submitted_at"`
 }
 
-type SMSDeliveryReport struct {
-	MessageRef int       `json:"message_ref"`
-	Raw        string    `json:"raw"`
-	ReceivedAt time.Time `json:"received_at"`
+type SMSNotification struct {
+	Type       SMSNotificationType `json:"type"`
+	Storage    string              `json:"storage,omitempty"`
+	Index      int                 `json:"index,omitempty"`
+	MessageRef int                 `json:"message_ref,omitempty"`
+	Raw        string              `json:"raw,omitempty"`
+	ReceivedAt time.Time           `json:"received_at"`
 }
