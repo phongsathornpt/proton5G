@@ -1,27 +1,31 @@
 {{define "topbar"}}
 <div class="logo">
-    <h1>FM350 Manager</h1>
-    <span class="badge">Cellular router</span>
+    <div class="logo-mark" aria-hidden="true">5G</div>
+    <div class="logo-copy">
+        <h1>FM350 Manager</h1>
+        <span class="logo-subtitle">5G router control panel</span>
+    </div>
 </div>
 <div class="status-cluster" aria-label="System status">
     <div class="status-pill" title="AT / USB modem link">
         <span id="status-at-dot" class="dot disconnected"></span>
-        <span class="status-pill-label">AT</span>
+        <span class="status-pill-label">Modem</span>
         <span id="status-at-text" class="status-pill-text">—</span>
     </div>
     <div class="status-pill" title="WAN data session">
         <span id="status-wan-dot" class="dot disconnected"></span>
-        <span class="status-pill-label">WAN</span>
+        <span class="status-pill-label">Internet</span>
         <span id="status-wan-text" class="status-pill-text">—</span>
     </div>
-    <div class="status-pill" title="WiFi hotspot">
+    <div class="status-pill" title="Wi-Fi hotspot">
         <span id="status-ap-dot" class="dot disconnected"></span>
-        <span class="status-pill-label">AP</span>
+        <span class="status-pill-label">Wi-Fi</span>
         <span id="status-ap-text" class="status-pill-text">—</span>
     </div>
 </div>
-<div class="status-indicator" title="AT serial summary">
+<div class="status-indicator" title="Live modem status" role="status" aria-live="polite">
     <span id="conn-dot" class="dot disconnected"></span>
+    <span class="status-indicator-label">Status</span>
     <span id="conn-status">Disconnected</span>
 </div>
 {{end}}
