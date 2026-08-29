@@ -1,44 +1,83 @@
 {{define "panel-overview"}}
 <section id="panel-overview" class="panel active" data-panel="overview">
+    <div class="panel-heading">
+        <div>
+            <h2>Dashboard</h2>
+            <p class="muted">Live internet, cellular, and Wi-Fi health at a glance.</p>
+        </div>
+    </div>
+
     <div class="grid">
         <section class="card full-width">
-            <h2>System status</h2>
-            <div class="chip-row" id="overview-chips">
+            <div class="hero-status">
+                <div>
+                    <span class="card-kicker">Router health</span>
+                    <div class="hero-title mt-15">
+                        <span id="ov-chip-wan" class="chip">Internet: —</span>
+                        <span id="ov-net">-</span>
+                    </div>
+                    <p class="hero-copy" id="ov-wan-detail">-</p>
+                </div>
+                <div class="hero-actions" aria-label="Quick actions">
+                    <button type="button" class="btn-primary" onclick="dataConnect()">Connect Internet</button>
+                    <button type="button" onclick="dataDisconnect()">Disconnect</button>
+                    <button type="button" onclick="showPanel('wan')">Internet settings</button>
+                </div>
+            </div>
+
+            <div class="metric-grid">
+                <div class="metric">
+                    <span class="metric-label">Signal</span>
+                    <span class="metric-value" id="ov-signal-pct">0%</span>
+                    <span class="metric-detail" id="ov-sig-detail">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Wi-Fi</span>
+                    <span class="metric-value" id="ov-ap-detail">-</span>
+                    <span class="metric-detail">Hotspot and connected clients</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Temperature</span>
+                    <span class="metric-value" id="ov-temp">-</span>
+                    <span class="metric-detail">Modem thermal status</span>
+                </div>
+            </div>
+
+            <div class="signal-meter mt-15" aria-label="Signal quality">
+                <div class="bar-container">
+                    <div id="ov-signal-fill" class="fill" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div class="chip-row mt-15" id="overview-chips" aria-label="Detailed system state">
                 <span class="chip" id="ov-chip-at">AT: —</span>
                 <span class="chip" id="ov-chip-sim">SIM: —</span>
                 <span class="chip" id="ov-chip-reg">Reg: —</span>
                 <span class="chip" id="ov-chip-endc" style="display: none;">EN-DC: Active</span>
-                <span class="chip" id="ov-chip-wan">WAN: —</span>
                 <span class="chip" id="ov-chip-ap">AP: —</span>
             </div>
-            <div class="signal-meter mt-15">
-                <div class="bar-container">
-                    <div id="ov-signal-fill" class="fill" style="width: 0%;"></div>
-                </div>
-                <span id="ov-signal-pct" class="pct">0%</span>
+
+            <div class="info-list mt-15">
+                <div class="info-item"><span>Last live update</span><strong id="ov-updated">-</strong></div>
             </div>
-            <div class="info-list">
-                <div class="info-item"><span>Operator / tech:</span> <strong id="ov-net">-</strong></div>
-                <div class="info-item"><span>Signal:</span> <strong id="ov-sig-detail">-</strong></div>
-                <div class="info-item"><span>Temperature:</span> <strong id="ov-temp">-</strong></div>
-                <div class="info-item"><span>Last poll:</span> <strong id="ov-updated">-</strong></div>
-                <div class="info-item"><span>WAN IP / iface:</span> <strong id="ov-wan-detail">-</strong></div>
-                <div class="info-item"><span>Hotspot:</span> <strong id="ov-ap-detail">-</strong></div>
-            </div>
+
             <div class="button-group mt-15">
-                <button type="button" class="btn-primary" onclick="dataConnect()">Connect WAN</button>
-                <button type="button" onclick="dataDisconnect()">Disconnect WAN</button>
-                <button type="button" class="btn-primary" onclick="hotspotStart()">Start hotspot</button>
-                <button type="button" onclick="hotspotStop()">Stop hotspot</button>
-                <button type="button" onclick="showPanel('wan')">WAN settings</button>
-                <button type="button" onclick="showPanel('lan')">LAN settings</button>
+                <button type="button" class="btn-primary" onclick="hotspotStart()">Start Wi-Fi</button>
+                <button type="button" onclick="hotspotStop()">Stop Wi-Fi</button>
+                <button type="button" onclick="showPanel('lan')">Wi-Fi settings</button>
+                <button type="button" onclick="showPanel('cellular')">Cellular details</button>
             </div>
-            <p class="hint">Typical path: Cellular (modem) → WAN (APN + connect) → LAN (WiFi hotspot). LTE is the internet uplink; WiFi shares it via NAT.</p>
         </section>
+
         <section class="card full-width">
-            <h2>Signal history</h2>
+            <div class="card-header">
+                <div>
+                    <span class="card-kicker">Live telemetry</span>
+                    <div class="card-title">Signal history</div>
+                </div>
+            </div>
             <canvas id="signal-chart" width="900" height="140" aria-label="Signal percentage history"></canvas>
-            <p class="hint">Signal quality % (newest on the right). Updated from status polls / SSE.</p>
+            <p class="hint">Signal quality over recent status updates. Newest samples appear on the right.</p>
         </section>
     </div>
 </section>
